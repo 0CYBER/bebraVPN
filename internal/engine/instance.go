@@ -2,7 +2,8 @@ package engine
 
 import (
 	"encoding/json"
-
+	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/0CYBER/bebravpn/internal/config"
@@ -29,7 +30,8 @@ func (e *Engine) Start(info *config.VlessInfo, localPort int) error {
 
 	serverConfig, err := core.LoadConfig("json", configJSON)
 	if err != nil {
-		return err
+		log.Printf("Xray Config JSON: %s", string(configJSON))
+		return fmt.Errorf("load config failed: %v", err)
 	}
 
 	server, err := core.New(serverConfig)
@@ -83,44 +85,71 @@ func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]i
 							"address": info.Address,
 							"port": func() int {
 								p, _ := strconv.Atoi(info.Port)
+								if p == 0 {
+									return 443
+								}
 								return p
 							}(),
 							"users": []interface{}{
-								map[string]interface{}{
-									"id":         info.UUID,
-									"encryption": "none",
-									"flow":       info.Flow,
-								},
+								func() map[string]interface{} {
+									user := map[string]interface{}{
+										"id":         info.UUID,
+										"encryption": "none",
+									}
+									if info.Flow != "" {
+										user["flow"] = info.Flow
+									}
+									return user
+								}(),
 							},
 						},
 					},
 				},
-				"streamSettings": map[string]interface{}{
-					"network":  info.Type,
-					"security": info.Security,
-					"sockopt": map[string]interface{}{
-						"dialerProxy": "fragment",
-					},
-					"tlsSettings": map[string]interface{}{
-						"serverName":    info.SNI,
-						"allowInsecure": false,
-						"fingerprint":   info.FP,
-					},
-					"realitySettings": map[string]interface{}{
-						"publicKey":   info.PBK,
-						"shortId":     info.SID,
-						"serverName":  info.SNI,
-						"fingerprint": info.FP,
-					},
-				},
+				"streamSettings": func() map[string]interface{} {
+					ss := map[string]interface{}{
+						"network": func() string {
+							if info.Type == "" {
+								return "tcp"
+							}
+							return info.Type
+						}(),
+						"security": func() string {
+							if info.Security == "" {
+								return "none"
+							}
+							return info.Security
+						}(),
+						"sockopt": map[string]interface{}{
+							"dialerProxy": "fragment",
+						},
+					}
+					switch info.Security {
+					case "tls":
+						ss["tlsSettings"] = map[string]interface{}{
+							"serverName":    info.SNI,
+							"allowInsecure": false,
+							"fingerprint":   info.FP,
+						}
+					case "reality":
+						ss["realitySettings"] = map[string]interface{}{
+							"publicKey":   info.PBK,
+							"shortId":     info.SID,
+							"serverName":  info.SNI,
+							"fingerprint": info.FP,
+						}
+					}
+					return ss
+				}(),
 			},
 			map[string]interface{}{
-				"protocol": "fragment",
+				"protocol": "freedom",
 				"tag":      "fragment",
 				"settings": map[string]interface{}{
-					"packets":  "tlshello",
-					"length":   "100-200",
-					"interval": "10-20",
+					"fragment": map[string]interface{}{
+						"packets":  "tlshello",
+						"length":   "100-200",
+						"interval": "10-20",
+					},
 				},
 				"streamSettings": map[string]interface{}{
 					"sockopt": map[string]interface{}{
