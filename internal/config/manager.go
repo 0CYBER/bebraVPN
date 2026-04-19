@@ -1,35 +1,46 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
 
 type Manager struct {
 	configPath string
+	serversDir string
 }
 
 func NewManager() *Manager {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".bebravpn")
 	os.MkdirAll(configDir, 0755)
-	
+
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+	serversDir := filepath.Join(exeDir, "servers")
+	os.MkdirAll(serversDir, 0755)
+
 	v := viper.New()
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 	v.AddConfigPath(configDir)
 	v.AddConfigPath(".")
-	
+
 	// Defaults
 	v.SetDefault("system.proxy_port", 10809)
 	v.SetDefault("system.socks_port", 10808)
 	v.SetDefault("system.enable_proxy", true)
 	v.SetDefault("log_level", "warning")
 
-	return &Manager{configPath: filepath.Join(configDir, "config.yaml")}
+	return &Manager{
+		configPath: filepath.Join(configDir, "config.yaml"),
+		serversDir: serversDir,
+	}
 }
 
 func (m *Manager) Load() (*Config, error) {
@@ -44,7 +55,53 @@ func (m *Manager) Load() (*Config, error) {
 		return nil, err
 	}
 
+	// Dynamic servers loading
+	scannedServers := m.scanServersDir()
+	cfg.Servers = append(cfg.Servers, scannedServers...)
+
 	return &cfg, nil
+}
+
+func (m *Manager) scanServersDir() []Server {
+	var servers []Server
+	files, err := os.ReadDir(m.serversDir)
+	if err != nil {
+		return servers
+	}
+
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".txt") {
+			continue
+		}
+
+		filePath := filepath.Join(m.serversDir, file.Name())
+		f, err := os.Open(filePath)
+		if err != nil {
+			continue
+		}
+		
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+
+			if info, err := ParseVless(line); err == nil {
+				name := info.Name
+				if name == "" {
+					name = strings.TrimSuffix(file.Name(), ".txt")
+				}
+				servers = append(servers, Server{
+					Name: name,
+					URL:  line,
+				})
+			}
+		}
+		f.Close()
+	}
+
+	return servers
 }
 
 func (m *Manager) Save(cfg *Config) error {
