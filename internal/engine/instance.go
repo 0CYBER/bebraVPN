@@ -189,16 +189,20 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		// Add TUN inbound
 		inbounds := cfg["inbounds"].([]interface{})
 		tunInbound := map[string]interface{}{
-			"tag": "tun2socks",
-			"port": 0,
+			"tag":      "tun2socks",
+			"port":     0,
 			"protocol": "tun",
 			"settings": map[string]interface{}{
-				"network": "tcp,udp",
+				"address":     []string{"172.19.0.1/30"},
+				"mtu":         1500,
+				"network":     "tcp,udp",
+				"stack":       "system",
+				"strictRoute": true,
 			},
 			"sniffing": map[string]interface{}{
-				"enabled": true,
+				"enabled":      true,
 				"destOverride": []string{"http", "tls", "quic"},
-				"routeOnly": true,
+				"routeOnly":    true,
 			},
 		}
 		cfg["inbounds"] = append(inbounds, tunInbound)
@@ -207,16 +211,16 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		routingRules := []interface{}{}
 		if len(sysConfig.BypassApps) > 0 {
 			bypassRule := map[string]interface{}{
-				"type": "field",
-				"app": sysConfig.BypassApps,
+				"type":        "field",
+				"process":     sysConfig.BypassApps,
 				"outboundTag": "direct",
 			}
 			routingRules = append(routingRules, bypassRule)
 		}
-		
+
 		cfg["routing"] = map[string]interface{}{
-			"domainStrategy": "AsIs",
-			"rules": routingRules,
+			"domainStrategy": "IPIfNonMatch",
+			"rules":          routingRules,
 		}
 	}
 
