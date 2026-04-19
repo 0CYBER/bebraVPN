@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/0CYBER/bebravpn/internal/config"
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/infra/conf/serial"
 
 	// Register protocols
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -28,10 +30,16 @@ func (e *Engine) Start(info *config.VlessInfo, localPort int) error {
 		return err
 	}
 
-	serverConfig, err := core.LoadConfig("json", configJSON)
+	reader := bytes.NewReader(configJSON)
+	cfg, err := serial.DecodeJSONConfig(reader)
 	if err != nil {
 		log.Printf("Xray Config JSON: %s", string(configJSON))
-		return fmt.Errorf("load config failed: %v", err)
+		return fmt.Errorf("json config validation failed: %v", err)
+	}
+
+	serverConfig, err := cfg.Build()
+	if err != nil {
+		return fmt.Errorf("build config failed: %v", err)
 	}
 
 	server, err := core.New(serverConfig)
