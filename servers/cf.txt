@@ -1,1 +1,0 @@
-vless://test@1.1.1.1:443?security=reality&sni=cloudflare.com&fp=chrome&pbk=xyz&sid=abc#Cloudflare
