@@ -62,8 +62,13 @@ func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]i
 		},
 		"inbounds": []interface{}{
 			map[string]interface{}{
-				"port":     localPort,
-				"listen":   "127.0.0.1",
+				"port": func() int {
+					if localPort == 0 {
+						return 10808
+					}
+					return localPort
+				}(),
+				"listen": "127.0.0.1",
 				"protocol": "socks",
 				"settings": map[string]interface{}{
 					"auth": "noauth",

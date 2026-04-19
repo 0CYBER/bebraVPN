@@ -25,17 +25,16 @@ func NewManager() *Manager {
 	serversDir := filepath.Join(exeDir, "servers")
 	os.MkdirAll(serversDir, 0755)
 
-	v := viper.New()
-	v.SetConfigName("config")
-	v.SetConfigType("yaml")
-	v.AddConfigPath(configDir)
-	v.AddConfigPath(".")
+	// Defaults using global viper
+	viper.SetConfigName("config")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(configDir)
+	viper.AddConfigPath(".")
 
-	// Defaults
-	v.SetDefault("system.proxy_port", 10809)
-	v.SetDefault("system.socks_port", 10808)
-	v.SetDefault("system.enable_proxy", true)
-	v.SetDefault("log_level", "warning")
+	viper.SetDefault("system.proxy_port", 10809)
+	viper.SetDefault("system.socks_port", 10808)
+	viper.SetDefault("system.enable_proxy", true)
+	viper.SetDefault("log_level", "warning")
 
 	return &Manager{
 		configPath: filepath.Join(configDir, "config.yaml"),
