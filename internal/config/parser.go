@@ -7,19 +7,28 @@ import (
 )
 
 type VlessInfo struct {
-	UUID     string
-	Address  string
-	Port     string
-	Security string
-	Type     string
-	Host     string
-	Path     string
-	SNI      string
-	Flow     string
-	Name     string
-	PBK      string // Reality public key
-	SID      string // Reality short id
-	FP       string // Fingerprint
+	UUID          string
+	Address       string
+	Port          string
+	Security      string
+	Type          string
+	Host          string
+	Path          string
+	SNI           string
+	Flow          string
+	Name          string
+	PBK           string // Reality public key
+	SID           string // Reality short id
+	FP            string // Fingerprint
+	ALPN          string
+	ServiceName   string
+	Authority     string
+	Mode          string
+	HeaderType    string
+	SpiderX       string
+	AllowInsecure bool
+	ECHConfigList string
+	ECHForceQuery string
 }
 
 func ParseVless(link string) (*VlessInfo, error) {
@@ -49,6 +58,18 @@ func ParseVless(link string) (*VlessInfo, error) {
 	info.PBK = q.Get("pbk")
 	info.SID = q.Get("sid")
 	info.FP = q.Get("fp")
+	info.ALPN = q.Get("alpn")
+	info.ServiceName = q.Get("serviceName")
+	info.Authority = q.Get("authority")
+	info.Mode = q.Get("mode")
+	info.HeaderType = q.Get("headerType")
+	info.SpiderX = q.Get("spx")
+	if info.SpiderX == "" {
+		info.SpiderX = q.Get("spiderX")
+	}
+	info.AllowInsecure = q.Get("allowInsecure") == "1" || strings.EqualFold(q.Get("allowInsecure"), "true")
+	info.ECHConfigList = q.Get("echConfigList")
+	info.ECHForceQuery = q.Get("echForceQuery")
 
 	return info, nil
 }

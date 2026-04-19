@@ -2,11 +2,25 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/0CYBER/bebravpn/internal/config"
 	"github.com/spf13/cobra"
 )
+
+func normalizeAppTarget(target string) string {
+	target = strings.TrimSpace(strings.Trim(target, `"'`))
+	target = strings.ToLower(filepath.Base(target))
+	if target != "" && filepath.Ext(target) == "" {
+		target += ".exe"
+	}
+	return target
+}
+
+func normalizeDomainTarget(target string) string {
+	return strings.ToLower(strings.TrimSpace(strings.Trim(target, `"'`)))
+}
 
 var excludeCmd = &cobra.Command{
 	Use:   "exclude",
@@ -64,7 +78,10 @@ By default, it adds an application. Use --domain to add a domain.
 If you add 'anydesk', it will automatically add both the process and its common domains.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		target := strings.ToLower(args[0])
+		target := normalizeAppTarget(args[0])
+		if isDomain {
+			target = normalizeDomainTarget(args[0])
+		}
 		manager := config.NewManager()
 		cfg, err := manager.Load()
 		if err != nil {
@@ -81,7 +98,7 @@ If you add 'anydesk', it will automatically add both the process and its common 
 			// Add app
 			exists := false
 			for _, app := range cfg.System.BypassApps {
-				if strings.ToLower(app) == anydeskApp {
+				if normalizeAppTarget(app) == anydeskApp {
 					exists = true
 					break
 				}
@@ -95,7 +112,7 @@ If you add 'anydesk', it will automatically add both the process and its common 
 			for _, d := range anydeskDomains {
 				dExists := false
 				for _, existing := range cfg.System.BypassDomains {
-					if strings.ToLower(existing) == d {
+					if normalizeDomainTarget(existing) == d {
 						dExists = true
 						break
 					}
@@ -120,7 +137,7 @@ If you add 'anydesk', it will automatically add both the process and its common 
 
 		if isDomain {
 			for _, d := range cfg.System.BypassDomains {
-				if strings.ToLower(d) == target {
+				if normalizeDomainTarget(d) == target {
 					fmt.Printf("Domain '%s' is already in the bypass list.\n", target)
 					return
 				}
@@ -129,7 +146,7 @@ If you add 'anydesk', it will automatically add both the process and its common 
 			fmt.Printf("Domain '%s' added to the bypass list.\n", target)
 		} else {
 			for _, app := range cfg.System.BypassApps {
-				if strings.ToLower(app) == target {
+				if normalizeAppTarget(app) == target {
 					fmt.Printf("App '%s' is already in the bypass list.\n", target)
 					return
 				}
@@ -150,7 +167,10 @@ var excludeRemoveCmd = &cobra.Command{
 	Short: "Remove an application or domain from the bypass list",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		target := strings.ToLower(args[0])
+		target := normalizeAppTarget(args[0])
+		if isDomain {
+			target = normalizeDomainTarget(args[0])
+		}
 		manager := config.NewManager()
 		cfg, err := manager.Load()
 		if err != nil {
@@ -162,7 +182,7 @@ var excludeRemoveCmd = &cobra.Command{
 		if isDomain {
 			var newBypass []string
 			for _, d := range cfg.System.BypassDomains {
-				if strings.ToLower(d) != target {
+				if normalizeDomainTarget(d) != target {
 					newBypass = append(newBypass, d)
 				} else {
 					found = true
@@ -172,7 +192,7 @@ var excludeRemoveCmd = &cobra.Command{
 		} else {
 			var newBypass []string
 			for _, app := range cfg.System.BypassApps {
-				if strings.ToLower(app) != target {
+				if normalizeAppTarget(app) != target {
 					newBypass = append(newBypass, app)
 				} else {
 					found = true

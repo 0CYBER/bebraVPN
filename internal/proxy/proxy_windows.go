@@ -7,28 +7,50 @@ import (
 )
 
 const (
-	internetSettingsKey = `Software\Microsoft\Windows\CurrentVersion\Internet Settings`
-	INTERNET_OPTION_SETTINGS_CHANGED   = 39
-	INTERNET_OPTION_REFRESH            = 37
+	internetSettingsKey              = `Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+	INTERNET_OPTION_SETTINGS_CHANGED = 39
+	INTERNET_OPTION_REFRESH          = 37
 )
 
 var (
-	wininet         = syscall.NewLazyDLL("wininet.dll")
+	wininet           = syscall.NewLazyDLL("wininet.dll")
 	internetSetOption = wininet.NewProc("InternetSetOptionW")
 )
 
-type WindowsProxy struct{}
+type WindowsProxy struct {
+	originalCaptured bool
+	originalEnabled  uint64
+	originalServer   string
+	originalOverride string
+	hadServerValue   bool
+	hadOverrideValue bool
+}
 
 func New() *WindowsProxy {
 	return &WindowsProxy{}
 }
 
 func (p *WindowsProxy) SetProxy(addr string) error {
-	k, err := registry.OpenKey(registry.CURRENT_USER, internetSettingsKey, registry.SET_VALUE)
+	k, err := registry.OpenKey(registry.CURRENT_USER, internetSettingsKey, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
 	defer k.Close()
+
+	if !p.originalCaptured {
+		if value, _, err := k.GetIntegerValue("ProxyEnable"); err == nil {
+			p.originalEnabled = value
+		}
+		if value, _, err := k.GetStringValue("ProxyServer"); err == nil {
+			p.originalServer = value
+			p.hadServerValue = true
+		}
+		if value, _, err := k.GetStringValue("ProxyOverride"); err == nil {
+			p.originalOverride = value
+			p.hadOverrideValue = true
+		}
+		p.originalCaptured = true
+	}
 
 	if err := k.SetDWordValue("ProxyEnable", 1); err != nil {
 		return err
@@ -51,7 +73,23 @@ func (p *WindowsProxy) UnsetProxy() error {
 	}
 	defer k.Close()
 
-	if err := k.SetDWordValue("ProxyEnable", 0); err != nil {
+	if p.originalCaptured {
+		if err := k.SetDWordValue("ProxyEnable", uint32(p.originalEnabled)); err != nil {
+			return err
+		}
+		if p.hadServerValue {
+			if err := k.SetStringValue("ProxyServer", p.originalServer); err != nil {
+				return err
+			}
+		} else {
+			_ = k.DeleteValue("ProxyServer")
+		}
+		if p.hadOverrideValue {
+			if err := k.SetStringValue("ProxyOverride", p.originalOverride); err != nil {
+				return err
+			}
+		}
+	} else if err := k.SetDWordValue("ProxyEnable", 0); err != nil {
 		return err
 	}
 

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"strconv"
+	"strings"
 
 	"github.com/0CYBER/bebravpn/internal/config"
 	"github.com/0CYBER/bebravpn/internal/utils"
@@ -70,6 +72,245 @@ func (e *Engine) Stop() error {
 	return nil
 }
 
+func splitAndTrimCSV(value string) []string {
+	var result []string
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	var result []string
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func randomRange(min, max int) string {
+	if max <= min {
+		return strconv.Itoa(min)
+	}
+	return fmt.Sprintf("%d-%d", min+rand.IntN(6), max+rand.IntN(8))
+}
+
+func chooseRandom(values []string, fallback string) string {
+	if len(values) == 0 {
+		return fallback
+	}
+	return values[rand.IntN(len(values))]
+}
+
+func defaultFingerprint(info *config.VlessInfo) string {
+	if info.FP != "" {
+		return info.FP
+	}
+	return chooseRandom([]string{"chrome", "firefox", "edge", "safari"}, "chrome")
+}
+
+func buildProtectionDomains(info *config.VlessInfo) []string {
+	var domains []string
+	if info.Address != "" && !strings.EqualFold(info.Address, "localhost") && !strings.Contains(info.Address, ":") {
+		domains = append(domains, "full:"+info.Address)
+	}
+	if info.SNI != "" {
+		domains = append(domains, "full:"+info.SNI)
+	}
+	return uniqueStrings(domains)
+}
+
+func buildRemoteDNSDomains() []string {
+	return []string{
+		"full:cloudflare-dns.com",
+		"full:dns.google",
+		"full:dns.quad9.net",
+	}
+}
+
+func buildFinalMask(info *config.VlessInfo) map[string]interface{} {
+	packets := "tlshello"
+	if strings.EqualFold(info.Security, "reality") {
+		packets = chooseRandom([]string{"1-2", "1-3", "tlshello"}, "1-3")
+	}
+	return map[string]interface{}{
+		"tcp": []interface{}{
+			map[string]interface{}{
+				"type": "fragment",
+				"settings": map[string]interface{}{
+					"packets": packets,
+					"length":  randomRange(40, 120),
+					"delay":   randomRange(8, 24),
+				},
+			},
+		},
+		"udp": []interface{}{
+			map[string]interface{}{
+				"type": "noise",
+				"settings": map[string]interface{}{
+					"length": randomRange(8, 24),
+					"delay":  randomRange(8, 18),
+				},
+			},
+		},
+	}
+}
+
+func buildStreamSettings(info *config.VlessInfo) map[string]interface{} {
+	network := info.Type
+	if network == "" {
+		network = "tcp"
+	}
+
+	security := info.Security
+	if security == "" {
+		security = "none"
+	}
+
+	streamSettings := map[string]interface{}{
+		"network":  network,
+		"security": security,
+	}
+
+	if security == "tls" {
+		tlsSettings := map[string]interface{}{
+			"serverName":    info.SNI,
+			"allowInsecure": info.AllowInsecure,
+			"fingerprint":   defaultFingerprint(info),
+		}
+		if alpn := splitAndTrimCSV(info.ALPN); len(alpn) > 0 {
+			tlsSettings["alpn"] = alpn
+		} else {
+			tlsSettings["alpn"] = []string{"h2", "http/1.1"}
+		}
+		if info.ECHConfigList != "" {
+			tlsSettings["echConfigList"] = info.ECHConfigList
+		}
+		if info.ECHForceQuery != "" {
+			tlsSettings["echForceQuery"] = info.ECHForceQuery
+		}
+		streamSettings["tlsSettings"] = tlsSettings
+	}
+
+	if security == "reality" {
+		streamSettings["realitySettings"] = map[string]interface{}{
+			"publicKey":   info.PBK,
+			"shortId":     info.SID,
+			"serverName":  info.SNI,
+			"fingerprint": defaultFingerprint(info),
+			"spiderX": func() string {
+				if info.SpiderX != "" {
+					return info.SpiderX
+				}
+				return "/"
+			}(),
+			"show": false,
+		}
+	}
+
+	switch network {
+	case "ws":
+		wsSettings := map[string]interface{}{}
+		if info.Host != "" {
+			wsSettings["host"] = info.Host
+		}
+		if info.Path != "" {
+			wsSettings["path"] = info.Path
+		}
+		if len(wsSettings) > 0 {
+			streamSettings["wsSettings"] = wsSettings
+		}
+	case "grpc":
+		grpcSettings := map[string]interface{}{
+			"multiMode": info.Mode == "multi",
+		}
+		if info.ServiceName != "" {
+			grpcSettings["serviceName"] = info.ServiceName
+		}
+		if info.Authority != "" {
+			grpcSettings["authority"] = info.Authority
+		} else if info.Host != "" {
+			grpcSettings["authority"] = info.Host
+		}
+		streamSettings["grpcSettings"] = grpcSettings
+	case "httpupgrade":
+		httpupgradeSettings := map[string]interface{}{}
+		if info.Host != "" {
+			httpupgradeSettings["host"] = info.Host
+		}
+		if info.Path != "" {
+			httpupgradeSettings["path"] = info.Path
+		}
+		if len(httpupgradeSettings) > 0 {
+			streamSettings["httpupgradeSettings"] = httpupgradeSettings
+		}
+	case "xhttp", "splithttp":
+		xhttpSettings := map[string]interface{}{}
+		if info.Host != "" {
+			xhttpSettings["host"] = info.Host
+		}
+		if info.Path != "" {
+			xhttpSettings["path"] = info.Path
+		}
+		if info.Mode != "" {
+			xhttpSettings["mode"] = info.Mode
+		}
+		if len(xhttpSettings) > 0 {
+			streamSettings["xhttpSettings"] = xhttpSettings
+		}
+	default:
+		if info.HeaderType == "http" {
+			streamSettings["tcpSettings"] = map[string]interface{}{
+				"header": map[string]interface{}{
+					"type": "http",
+				},
+			}
+		}
+	}
+
+	if security == "tls" || security == "reality" {
+		streamSettings["finalmask"] = buildFinalMask(info)
+	}
+
+	return streamSettings
+}
+
+func buildDNSConfig(enableTun bool) map[string]interface{} {
+	servers := []interface{}{
+		map[string]interface{}{
+			"address":      chooseRandom([]string{"https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query"}, "https://cloudflare-dns.com/dns-query"),
+			"skipFallback": true,
+		},
+		map[string]interface{}{
+			"address": chooseRandom([]string{"https://dns.quad9.net/dns-query", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, "https://dns.quad9.net/dns-query"),
+		},
+	}
+	if !enableTun {
+		servers = append(servers, "localhost")
+	}
+	return map[string]interface{}{
+		"hosts": map[string]interface{}{
+			"dns.google":         []string{"8.8.8.8", "8.8.4.4"},
+			"cloudflare-dns.com": []string{"1.1.1.1", "1.0.0.1"},
+			"dns.quad9.net":      []string{"9.9.9.9", "149.112.112.112"},
+		},
+		"queryStrategy":   "UseIP",
+		"disableFallback": enableTun,
+		"servers":         servers,
+	}
+}
+
 func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) map[string]interface{} {
 	// Minimal Xray config for VLESS connection
 	cfg := map[string]interface{}{
@@ -78,13 +319,14 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		},
 		"inbounds": []interface{}{
 			map[string]interface{}{
+				"tag": "socks-in",
 				"port": func() int {
 					if sysConfig.SocksPort == 0 {
 						return 10808
 					}
 					return sysConfig.SocksPort
 				}(),
-				"listen": "127.0.0.1",
+				"listen":   "127.0.0.1",
 				"protocol": "socks",
 				"settings": map[string]interface{}{
 					"auth": "noauth",
@@ -99,6 +341,7 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		},
 		"outbounds": []interface{}{
 			map[string]interface{}{
+				"tag":      "proxy",
 				"protocol": "vless",
 				"settings": map[string]interface{}{
 					"vnext": []interface{}{
@@ -126,41 +369,7 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 						},
 					},
 				},
-				"streamSettings": func() map[string]interface{} {
-					ss := map[string]interface{}{
-						"network": func() string {
-							if info.Type == "" {
-								return "tcp"
-							}
-							return info.Type
-						}(),
-						"security": func() string {
-							if info.Security == "" {
-								return "none"
-							}
-							return info.Security
-						}(),
-						"sockopt": map[string]interface{}{
-							"dialerProxy": "fragment",
-						},
-					}
-					switch info.Security {
-					case "tls":
-						ss["tlsSettings"] = map[string]interface{}{
-							"serverName":    info.SNI,
-							"allowInsecure": false,
-							"fingerprint":   info.FP,
-						}
-					case "reality":
-						ss["realitySettings"] = map[string]interface{}{
-							"publicKey":   info.PBK,
-							"shortId":     info.SID,
-							"serverName":  info.SNI,
-							"fingerprint": info.FP,
-						}
-					}
-					return ss
-				}(),
+				"streamSettings": buildStreamSettings(info),
 			},
 			map[string]interface{}{
 				"protocol": "freedom",
@@ -181,9 +390,32 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 			map[string]interface{}{
 				"protocol": "freedom",
 				"tag":      "direct",
+				"settings": map[string]interface{}{
+					"domainStrategy": "UseIP",
+				},
+			},
+			map[string]interface{}{
+				"protocol": "dns",
+				"tag":      "dns-out",
 			},
 		},
 	}
+
+	routingRules := []interface{}{
+		map[string]interface{}{
+			"type":        "field",
+			"inboundTag":  []string{"socks-in"},
+			"outboundTag": "proxy",
+		},
+	}
+
+	protectedDomains := buildProtectionDomains(info)
+	for _, domain := range buildRemoteDNSDomains() {
+		protectedDomains = append(protectedDomains, domain)
+	}
+	protectedDomains = uniqueStrings(protectedDomains)
+
+	cfg["dns"] = buildDNSConfig(sysConfig.EnableTun)
 
 	if sysConfig.EnableTun {
 		// Add TUN inbound
@@ -197,6 +429,7 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 				"mtu":         1500,
 				"network":     "tcp,udp",
 				"stack":       "system",
+				"autoRoute":   true,
 				"strictRoute": true,
 			},
 			"sniffing": map[string]interface{}{
@@ -207,11 +440,18 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		}
 		cfg["inbounds"] = append(inbounds, tunInbound)
 
-		// Create routing rules for excluded apps and domains
-		routingRules := []interface{}{}
+		routingRules = append(routingRules, map[string]interface{}{
+			"type":        "field",
+			"inboundTag":  []string{"tun2socks"},
+			"network":     "tcp,udp",
+			"port":        "53",
+			"outboundTag": "dns-out",
+		})
+
 		if len(sysConfig.BypassApps) > 0 {
 			bypassAppRule := map[string]interface{}{
 				"type":        "field",
+				"inboundTag":  []string{"tun2socks"},
 				"process":     sysConfig.BypassApps,
 				"outboundTag": "direct",
 			}
@@ -221,16 +461,37 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		if len(sysConfig.BypassDomains) > 0 {
 			bypassDomainRule := map[string]interface{}{
 				"type":        "field",
+				"inboundTag":  []string{"tun2socks"},
 				"domain":      sysConfig.BypassDomains,
 				"outboundTag": "direct",
 			}
 			routingRules = append(routingRules, bypassDomainRule)
 		}
-
-		cfg["routing"] = map[string]interface{}{
-			"domainStrategy": "IPIfNonMatch",
-			"rules":          routingRules,
+		if len(protectedDomains) > 0 {
+			routingRules = append(routingRules, map[string]interface{}{
+				"type":        "field",
+				"inboundTag":  []string{"tun2socks"},
+				"domain":      protectedDomains,
+				"outboundTag": "proxy",
+			})
 		}
+		routingRules = append(routingRules, map[string]interface{}{
+			"type":        "field",
+			"inboundTag":  []string{"tun2socks"},
+			"outboundTag": "proxy",
+		})
+	} else if len(protectedDomains) > 0 {
+		routingRules = append(routingRules, map[string]interface{}{
+			"type":        "field",
+			"inboundTag":  []string{"socks-in"},
+			"domain":      protectedDomains,
+			"outboundTag": "proxy",
+		})
+	}
+
+	cfg["routing"] = map[string]interface{}{
+		"domainStrategy": "IPIfNonMatch",
+		"rules":          routingRules,
 	}
 
 	return cfg
