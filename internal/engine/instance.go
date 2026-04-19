@@ -3,6 +3,8 @@ package engine
 import (
 	"encoding/json"
 
+	"strconv"
+
 	"github.com/0CYBER/bebravpn/internal/config"
 	"github.com/xtls/xray-core/core"
 
@@ -79,7 +81,10 @@ func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]i
 					"vnext": []interface{}{
 						map[string]interface{}{
 							"address": info.Address,
-							"port":    info.Port,
+							"port": func() int {
+								p, _ := strconv.Atoi(info.Port)
+								return p
+							}(),
 							"users": []interface{}{
 								map[string]interface{}{
 									"id":         info.UUID,
@@ -110,14 +115,12 @@ func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]i
 				},
 			},
 			map[string]interface{}{
-				"protocol": "freedom",
+				"protocol": "fragment",
 				"tag":      "fragment",
 				"settings": map[string]interface{}{
-					"fragment": map[string]interface{}{
-						"packets":  "tlshello",
-						"length":   "100-200",
-						"interval": "10-20",
-					},
+					"packets":  "tlshello",
+					"length":   "100-200",
+					"interval": "10-20",
 				},
 				"streamSettings": map[string]interface{}{
 					"sockopt": map[string]interface{}{
