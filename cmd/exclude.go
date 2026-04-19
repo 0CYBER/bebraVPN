@@ -78,6 +78,7 @@ By default, it adds an application. Use --domain to add a domain.
 If you add 'anydesk', it will automatically add both the process and its common domains.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		rawTarget := strings.ToLower(strings.TrimSpace(strings.Trim(args[0], `"'`)))
 		target := normalizeAppTarget(args[0])
 		if isDomain {
 			target = normalizeDomainTarget(args[0])
@@ -89,7 +90,7 @@ If you add 'anydesk', it will automatically add both the process and its common 
 			return
 		}
 
-		if !isDomain && target == "anydesk" {
+		if !isDomain && (rawTarget == "anydesk" || target == "anydesk.exe") {
 			// Preset for AnyDesk
 			anydeskDomains := []string{"anydesk.com", "net.anydesk.com", "boot.anydesk.com", "relay.anydesk.com"}
 			anydeskApp := "anydesk.exe"
