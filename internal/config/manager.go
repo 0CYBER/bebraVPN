@@ -15,6 +15,8 @@ type Manager struct {
 	serversDir string
 }
 
+const importedServersFileName = "imported.txt"
+
 func NewManager() *Manager {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".bebravpn")
@@ -57,9 +59,8 @@ func (m *Manager) Load() (*Config, error) {
 		return nil, err
 	}
 
-	// Dynamic servers loading
-	scannedServers := m.scanServersDir()
-	cfg.Servers = append(cfg.Servers, scannedServers...)
+	// Servers are sourced from servers/*.txt only.
+	cfg.Servers = m.scanServersDir()
 
 	return &cfg, nil
 }
@@ -81,7 +82,7 @@ func (m *Manager) scanServersDir() []Server {
 		if err != nil {
 			continue
 		}
-		
+
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -107,10 +108,11 @@ func (m *Manager) scanServersDir() []Server {
 }
 
 func (m *Manager) Save(cfg *Config) error {
-	viper.Set("servers", cfg.Servers)
+	// Servers are intentionally not persisted in config.yaml.
+	viper.Set("servers", []Server{})
 	viper.Set("system", cfg.System)
 	viper.Set("log_level", cfg.LogLevel)
-	
+
 	return viper.WriteConfigAs(m.configPath)
 }
 
@@ -130,10 +132,23 @@ func (m *Manager) AddServer(link string) error {
 		name = fmt.Sprintf("Server-%d", len(cfg.Servers)+1)
 	}
 
-	cfg.Servers = append(cfg.Servers, Server{
-		Name: name,
-		URL:  link,
-	})
+	for _, server := range cfg.Servers {
+		if strings.EqualFold(strings.TrimSpace(server.URL), strings.TrimSpace(link)) {
+			return fmt.Errorf("server already exists")
+		}
+	}
 
+	importedPath := filepath.Join(m.serversDir, importedServersFileName)
+	f, err := os.OpenFile(importedPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := fmt.Fprintf(f, "%s\n", strings.TrimSpace(link)); err != nil {
+		return err
+	}
+
+	// Persist non-server config only, and clear any old server cache from config.yaml.
 	return m.Save(cfg)
 }
