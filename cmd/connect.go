@@ -86,7 +86,7 @@ var connectCmd = &cobra.Command{
 
 		// Initialize Engine
 		xray := engine.New()
-		err = xray.Start(info, cfg.System.SocksPort)
+		err = xray.Start(info, &cfg.System)
 		if err != nil {
 			fmt.Printf("Failed to start Xray: %v\n", err)
 			return

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/0CYBER/bebravpn/internal/config"
+	"github.com/0CYBER/bebravpn/internal/utils"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 
@@ -23,8 +24,15 @@ func New() *Engine {
 	return &Engine{}
 }
 
-func (e *Engine) Start(info *config.VlessInfo, localPort int) error {
-	xrayConfig := e.buildConfig(info, localPort)
+func (e *Engine) Start(info *config.VlessInfo, sysConfig *config.System) error {
+	if sysConfig.EnableTun {
+		// Ensure wintun.dll is available
+		if err := utils.EnsureWintun(); err != nil {
+			return fmt.Errorf("failed to ensure wintun.dll: %v", err)
+		}
+	}
+
+	xrayConfig := e.buildConfig(info, sysConfig)
 	configJSON, err := json.Marshal(xrayConfig)
 	if err != nil {
 		return err
@@ -62,19 +70,19 @@ func (e *Engine) Stop() error {
 	return nil
 }
 
-func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]interface{} {
+func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) map[string]interface{} {
 	// Minimal Xray config for VLESS connection
-	return map[string]interface{}{
+	cfg := map[string]interface{}{
 		"log": map[string]interface{}{
 			"loglevel": "warning",
 		},
 		"inbounds": []interface{}{
 			map[string]interface{}{
 				"port": func() int {
-					if localPort == 0 {
+					if sysConfig.SocksPort == 0 {
 						return 10808
 					}
-					return localPort
+					return sysConfig.SocksPort
 				}(),
 				"listen": "127.0.0.1",
 				"protocol": "socks",
@@ -170,6 +178,47 @@ func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]i
 					},
 				},
 			},
+			map[string]interface{}{
+				"protocol": "freedom",
+				"tag":      "direct",
+			},
 		},
 	}
+
+	if sysConfig.EnableTun {
+		// Add TUN inbound
+		inbounds := cfg["inbounds"].([]interface{})
+		tunInbound := map[string]interface{}{
+			"tag": "tun2socks",
+			"port": 0,
+			"protocol": "tun",
+			"settings": map[string]interface{}{
+				"network": "tcp,udp",
+			},
+			"sniffing": map[string]interface{}{
+				"enabled": true,
+				"destOverride": []string{"http", "tls", "quic"},
+				"routeOnly": true,
+			},
+		}
+		cfg["inbounds"] = append(inbounds, tunInbound)
+
+		// Create routing rules for excluded apps
+		routingRules := []interface{}{}
+		if len(sysConfig.BypassApps) > 0 {
+			bypassRule := map[string]interface{}{
+				"type": "field",
+				"app": sysConfig.BypassApps,
+				"outboundTag": "direct",
+			}
+			routingRules = append(routingRules, bypassRule)
+		}
+		
+		cfg["routing"] = map[string]interface{}{
+			"domainStrategy": "AsIs",
+			"rules": routingRules,
+		}
+	}
+
+	return cfg
 }

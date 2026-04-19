@@ -34,6 +34,8 @@ func NewManager() *Manager {
 	viper.SetDefault("system.proxy_port", 10809)
 	viper.SetDefault("system.socks_port", 10808)
 	viper.SetDefault("system.enable_proxy", true)
+	viper.SetDefault("system.enable_tun", false)
+	viper.SetDefault("system.bypass_apps", []string{})
 	viper.SetDefault("log_level", "warning")
 
 	return &Manager{
