@@ -1,12 +1,13 @@
 package prober
 
 import (
-	"crypto/tls"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/0CYBER/bebravpn/internal/config"
+	utls "github.com/refraction-networking/utls"
 )
 
 type Prober struct {
@@ -37,17 +38,54 @@ func (p *Prober) Ping(info *config.VlessInfo) (int64, error) {
 	// but the plan mentioned TLS Handshake.
 	
 	if info.Security == "tls" || info.Security == "reality" {
-		tlsConn := tls.Client(conn, &tls.Config{
+		tlsConn := utls.UClient(conn, &utls.Config{
 			InsecureSkipVerify: true,
 			ServerName:         info.SNI,
-		})
+		}, utls.HelloChrome_Auto)
 		
 		err = tlsConn.Handshake()
 		if err != nil {
-			return -1, fmt.Errorf("tls handshake failed: %v", err)
+			return -1, fmt.Errorf("utls handshake failed: %v", err)
 		}
 	}
 
 	latency := time.Since(start).Milliseconds()
 	return latency, nil
+}
+
+func (p *Prober) PingBatch(servers []config.Server, concurrency int) map[string]int64 {
+	results := make(map[string]int64)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	
+	sem := make(chan struct{}, concurrency)
+
+	for _, s := range servers {
+		wg.Add(1)
+		go func(s config.Server) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			info, err := config.ParseVless(s.URL)
+			if err != nil {
+				mu.Lock()
+				results[s.URL] = -1
+				mu.Unlock()
+				return
+			}
+
+			latency, err := p.Ping(info)
+			mu.Lock()
+			if err != nil {
+				results[s.URL] = -1
+			} else {
+				results[s.URL] = latency
+			}
+			mu.Unlock()
+		}(s)
+	}
+
+	wg.Wait()
+	return results
 }

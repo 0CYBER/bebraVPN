@@ -59,13 +59,16 @@ func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]i
 		"inbounds": []interface{}{
 			map[string]interface{}{
 				"port":     localPort,
+				"listen":   "127.0.0.1",
 				"protocol": "socks",
 				"settings": map[string]interface{}{
 					"auth": "noauth",
+					"udp":  true,
 				},
 				"sniffing": map[string]interface{}{
-					"enabled": true,
-					"destOverride": []string{"http", "tls"},
+					"enabled":      true,
+					"destOverride": []string{"http", "tls", "quic"},
+					"routeOnly":    true,
 				},
 			},
 		},
@@ -79,9 +82,9 @@ func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]i
 							"port":    info.Port,
 							"users": []interface{}{
 								map[string]interface{}{
-									"id":       info.UUID,
+									"id":         info.UUID,
 									"encryption": "none",
-									"flow":     info.Flow,
+									"flow":       info.Flow,
 								},
 							},
 						},
@@ -90,16 +93,35 @@ func (e *Engine) buildConfig(info *config.VlessInfo, localPort int) map[string]i
 				"streamSettings": map[string]interface{}{
 					"network":  info.Type,
 					"security": info.Security,
+					"sockopt": map[string]interface{}{
+						"dialerProxy": "fragment",
+					},
 					"tlsSettings": map[string]interface{}{
-						"serverName": info.SNI,
+						"serverName":    info.SNI,
 						"allowInsecure": false,
-						"fingerprint": info.FP,
+						"fingerprint":   info.FP,
 					},
 					"realitySettings": map[string]interface{}{
-						"publicKey": info.PBK,
-						"shortId":   info.SID,
-						"serverName": info.SNI,
+						"publicKey":   info.PBK,
+						"shortId":     info.SID,
+						"serverName":  info.SNI,
 						"fingerprint": info.FP,
+					},
+				},
+			},
+			map[string]interface{}{
+				"protocol": "freedom",
+				"tag":      "fragment",
+				"settings": map[string]interface{}{
+					"fragment": map[string]interface{}{
+						"packets":  "tlshello",
+						"length":   "100-200",
+						"interval": "10-20",
+					},
+				},
+				"streamSettings": map[string]interface{}{
+					"sockopt": map[string]interface{}{
+						"TcpNoDelay": true,
 					},
 				},
 			},

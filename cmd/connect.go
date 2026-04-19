@@ -5,12 +5,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/0CYBER/bebravpn/internal/config"
 	"github.com/0CYBER/bebravpn/internal/engine"
+	"github.com/0CYBER/bebravpn/internal/prober"
 	"github.com/0CYBER/bebravpn/internal/proxy"
 	"github.com/spf13/cobra"
 )
+
+var bestFlag bool
 
 var connectCmd = &cobra.Command{
 	Use:   "connect [server-name]",
@@ -29,17 +33,44 @@ var connectCmd = &cobra.Command{
 		}
 
 		var targetServer *config.Server
-		if len(args) > 0 {
+		if bestFlag {
+			fmt.Println("Finding the best server...")
+			p := prober.New(10 * time.Second)
+			results := p.PingBatch(cfg.Servers, 20)
+			
+			// Find best
+			var best *config.Server
+			minLatency := int64(1000000) // Large number
+
 			for i := range cfg.Servers {
-				if cfg.Servers[i].Name == args[0] {
-					targetServer = &cfg.Servers[i]
-					break
+				s := &cfg.Servers[i]
+				if l, ok := results[s.URL]; ok && l > 0 && l < minLatency {
+					minLatency = l
+					best = s
 				}
 			}
-		} else {
-			// Select best server or first one
-			targetServer = &cfg.Servers[0]
-			fmt.Printf("No server specified, using first one: %s\n", targetServer.Name)
+
+			if best != nil {
+				targetServer = best
+				fmt.Printf("Selected best server: %s (%dms)\n", targetServer.Name, minLatency)
+			} else {
+				fmt.Println("Could not determine best server. Using default.")
+			}
+		}
+
+		if targetServer == nil {
+			if len(args) > 0 {
+				for i := range cfg.Servers {
+					if cfg.Servers[i].Name == args[0] {
+						targetServer = &cfg.Servers[i]
+						break
+					}
+				}
+			} else {
+				// Select first one as fallback
+				targetServer = &cfg.Servers[0]
+				fmt.Printf("Using server: %s\n", targetServer.Name)
+			}
 		}
 
 		if targetServer == nil {
@@ -85,5 +116,6 @@ var connectCmd = &cobra.Command{
 }
 
 func init() {
+	connectCmd.Flags().BoolVarP(&bestFlag, "best", "b", false, "Connect to the server with lowest latency")
 	rootCmd.AddCommand(connectCmd)
 }

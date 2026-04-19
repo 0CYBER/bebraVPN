@@ -27,26 +27,33 @@ var listCmd = &cobra.Command{
 			return
 		}
 
-		p := prober.New(5 * time.Second)
+		p := prober.New(10 * time.Second)
+
+		var results map[string]int64
+		if pingFlag {
+			fmt.Println("Pinging servers in parallel...")
+			results = p.PingBatch(cfg.Servers, 20)
+		}
 
 		fmt.Printf("%-20s %-10s %s\n", "NAME", "LATENCY", "URL")
 		fmt.Printf("%-20s %-10s %s\n", "----", "-------", "---")
 
-		for i, s := range cfg.Servers {
+		for i := range cfg.Servers {
+			s := &cfg.Servers[i]
 			latencyStr := "N/A"
+			
 			if pingFlag {
-				info, _ := config.ParseVless(s.URL)
-				if info != nil {
-					l, err := p.Ping(info)
-					if err == nil {
-						latencyStr = fmt.Sprintf("%dms", l)
-						cfg.Servers[i].Latency = l
-					} else {
-						latencyStr = "Error"
-					}
+				if l, ok := results[s.URL]; ok && l > 0 {
+					latencyStr = fmt.Sprintf("%dms", l)
+					s.Latency = l
+				} else if l == -1 {
+					latencyStr = "Error"
+					s.Latency = -1
 				}
 			} else if s.Latency > 0 {
 				latencyStr = fmt.Sprintf("%dms", s.Latency)
+			} else if s.Latency == -1 {
+				latencyStr = "Error"
 			}
 
 			fmt.Printf("%-20s %-10s %s\n", s.Name, latencyStr, s.URL)
