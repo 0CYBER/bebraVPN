@@ -117,7 +117,7 @@ func defaultFingerprint(info *config.VlessInfo) string {
 	if info.FP != "" {
 		return info.FP
 	}
-	return chooseRandom([]string{"chrome", "firefox", "edge", "safari"}, "chrome")
+	return "chrome"
 }
 
 func buildProtectionDomains(info *config.VlessInfo) []string {
@@ -140,16 +140,12 @@ func buildRemoteDNSDomains() []string {
 }
 
 func buildFinalMask(info *config.VlessInfo) map[string]interface{} {
-	packets := "tlshello"
-	if strings.EqualFold(info.Security, "reality") {
-		packets = chooseRandom([]string{"1-2", "1-3", "tlshello"}, "1-3")
-	}
 	return map[string]interface{}{
 		"tcp": []interface{}{
 			map[string]interface{}{
 				"type": "fragment",
 				"settings": map[string]interface{}{
-					"packets": packets,
+					"packets": "tlshello",
 					"length":  randomRange(40, 120),
 					"delay":   randomRange(8, 24),
 				},
@@ -181,6 +177,9 @@ func buildStreamSettings(info *config.VlessInfo) map[string]interface{} {
 	streamSettings := map[string]interface{}{
 		"network":  network,
 		"security": security,
+		"sockopt": map[string]interface{}{
+			"dialerProxy": "fragment",
+		},
 	}
 
 	if security == "tls" {
@@ -296,9 +295,7 @@ func buildDNSConfig(enableTun bool) map[string]interface{} {
 			"address": chooseRandom([]string{"https://dns.quad9.net/dns-query", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, "https://dns.quad9.net/dns-query"),
 		},
 	}
-	if !enableTun {
-		servers = append(servers, "localhost")
-	}
+	servers = append(servers, "localhost")
 	return map[string]interface{}{
 		"hosts": map[string]interface{}{
 			"dns.google":         []string{"8.8.8.8", "8.8.4.4"},
@@ -306,7 +303,7 @@ func buildDNSConfig(enableTun bool) map[string]interface{} {
 			"dns.quad9.net":      []string{"9.9.9.9", "149.112.112.112"},
 		},
 		"queryStrategy":   "UseIP",
-		"disableFallback": enableTun,
+		"disableFallback": false,
 		"servers":         servers,
 	}
 }
@@ -409,12 +406,6 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		},
 	}
 
-	protectedDomains := buildProtectionDomains(info)
-	for _, domain := range buildRemoteDNSDomains() {
-		protectedDomains = append(protectedDomains, domain)
-	}
-	protectedDomains = uniqueStrings(protectedDomains)
-
 	cfg["dns"] = buildDNSConfig(sysConfig.EnableTun)
 
 	if sysConfig.EnableTun {
@@ -467,24 +458,9 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 			}
 			routingRules = append(routingRules, bypassDomainRule)
 		}
-		if len(protectedDomains) > 0 {
-			routingRules = append(routingRules, map[string]interface{}{
-				"type":        "field",
-				"inboundTag":  []string{"tun2socks"},
-				"domain":      protectedDomains,
-				"outboundTag": "proxy",
-			})
-		}
 		routingRules = append(routingRules, map[string]interface{}{
 			"type":        "field",
 			"inboundTag":  []string{"tun2socks"},
-			"outboundTag": "proxy",
-		})
-	} else if len(protectedDomains) > 0 {
-		routingRules = append(routingRules, map[string]interface{}{
-			"type":        "field",
-			"inboundTag":  []string{"socks-in"},
-			"domain":      protectedDomains,
 			"outboundTag": "proxy",
 		})
 	}
