@@ -54,12 +54,17 @@ var excludeTunOffCmd = &cobra.Command{
 	},
 }
 
+var isDomain bool
+
 var excludeAddCmd = &cobra.Command{
-	Use:   "add [app_name.exe]",
-	Short: "Add an application to the bypass list",
-	Args:  cobra.ExactArgs(1),
+	Use:   "add [target]",
+	Short: "Add an application or domain to the bypass list",
+	Long: `Add an application executable name or a domain to the bypass list. 
+By default, it adds an application. Use --domain to add a domain.
+If you add 'anydesk', it will automatically add both the process and its common domains.`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		appName := strings.ToLower(args[0])
+		target := strings.ToLower(args[0])
 		manager := config.NewManager()
 		cfg, err := manager.Load()
 		if err != nil {
@@ -67,28 +72,85 @@ var excludeAddCmd = &cobra.Command{
 			return
 		}
 
-		for _, app := range cfg.System.BypassApps {
-			if strings.ToLower(app) == appName {
-				fmt.Printf("App '%s' is already in the bypass list.\n", appName)
-				return
+		if !isDomain && target == "anydesk" {
+			// Preset for AnyDesk
+			anydeskDomains := []string{"anydesk.com", "net.anydesk.com", "boot.anydesk.com", "relay.anydesk.com"}
+			anydeskApp := "anydesk.exe"
+
+			addedAny := false
+			// Add app
+			exists := false
+			for _, app := range cfg.System.BypassApps {
+				if strings.ToLower(app) == anydeskApp {
+					exists = true
+					break
+				}
 			}
+			if !exists {
+				cfg.System.BypassApps = append(cfg.System.BypassApps, anydeskApp)
+				addedAny = true
+			}
+
+			// Add domains
+			for _, d := range anydeskDomains {
+				dExists := false
+				for _, existing := range cfg.System.BypassDomains {
+					if strings.ToLower(existing) == d {
+						dExists = true
+						break
+					}
+				}
+				if !dExists {
+					cfg.System.BypassDomains = append(cfg.System.BypassDomains, d)
+					addedAny = true
+				}
+			}
+
+			if addedAny {
+				if err := manager.Save(cfg); err != nil {
+					fmt.Printf("Error saving config: %v\n", err)
+					return
+				}
+				fmt.Println("AnyDesk preset applied: anydesk.exe and related domains added to bypass list.")
+			} else {
+				fmt.Println("AnyDesk is already in the bypass list (app and domains).")
+			}
+			return
 		}
 
-		cfg.System.BypassApps = append(cfg.System.BypassApps, appName)
+		if isDomain {
+			for _, d := range cfg.System.BypassDomains {
+				if strings.ToLower(d) == target {
+					fmt.Printf("Domain '%s' is already in the bypass list.\n", target)
+					return
+				}
+			}
+			cfg.System.BypassDomains = append(cfg.System.BypassDomains, target)
+			fmt.Printf("Domain '%s' added to the bypass list.\n", target)
+		} else {
+			for _, app := range cfg.System.BypassApps {
+				if strings.ToLower(app) == target {
+					fmt.Printf("App '%s' is already in the bypass list.\n", target)
+					return
+				}
+			}
+			cfg.System.BypassApps = append(cfg.System.BypassApps, target)
+			fmt.Printf("App '%s' added to the bypass list.\n", target)
+		}
+
 		if err := manager.Save(cfg); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
 			return
 		}
-		fmt.Printf("App '%s' added to the bypass list.\n", appName)
 	},
 }
 
 var excludeRemoveCmd = &cobra.Command{
-	Use:   "remove [app_name.exe]",
-	Short: "Remove an application from the bypass list",
+	Use:   "remove [target]",
+	Short: "Remove an application or domain from the bypass list",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		appName := strings.ToLower(args[0])
+		target := strings.ToLower(args[0])
 		manager := config.NewManager()
 		cfg, err := manager.Load()
 		if err != nil {
@@ -96,33 +158,45 @@ var excludeRemoveCmd = &cobra.Command{
 			return
 		}
 
-		var newBypass []string
 		found := false
-		for _, app := range cfg.System.BypassApps {
-			if strings.ToLower(app) != appName {
-				newBypass = append(newBypass, app)
-			} else {
-				found = true
+		if isDomain {
+			var newBypass []string
+			for _, d := range cfg.System.BypassDomains {
+				if strings.ToLower(d) != target {
+					newBypass = append(newBypass, d)
+				} else {
+					found = true
+				}
 			}
+			cfg.System.BypassDomains = newBypass
+		} else {
+			var newBypass []string
+			for _, app := range cfg.System.BypassApps {
+				if strings.ToLower(app) != target {
+					newBypass = append(newBypass, app)
+				} else {
+					found = true
+				}
+			}
+			cfg.System.BypassApps = newBypass
 		}
 
 		if !found {
-			fmt.Printf("App '%s' not found in the bypass list.\n", appName)
+			fmt.Printf("Target '%s' not found in the bypass list.\n", target)
 			return
 		}
 
-		cfg.System.BypassApps = newBypass
 		if err := manager.Save(cfg); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
 			return
 		}
-		fmt.Printf("App '%s' removed from the bypass list.\n", appName)
+		fmt.Printf("Target '%s' removed from the bypass list.\n", target)
 	},
 }
 
 var excludeListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all applications currently in the bypass list",
+	Short: "List all items in the bypass list",
 	Run: func(cmd *cobra.Command, args []string) {
 		manager := config.NewManager()
 		cfg, err := manager.Load()
@@ -131,24 +205,37 @@ var excludeListCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Println("=== App Exclusion List ===")
+		fmt.Println("=== Split Tunneling Configuration ===")
 		fmt.Printf("TUN Mode Enabled: %v\n", cfg.System.EnableTun)
+		fmt.Println("\nBypassed Applications:")
 		if len(cfg.System.BypassApps) == 0 {
-			fmt.Println("No apps bypassed.")
+			fmt.Println("  (none)")
 		} else {
 			for idx, app := range cfg.System.BypassApps {
-				fmt.Printf("%d. %s\n", idx+1, app)
+				fmt.Printf("  %d. %s\n", idx+1, app)
+			}
+		}
+
+		fmt.Println("\nBypassed Domains:")
+		if len(cfg.System.BypassDomains) == 0 {
+			fmt.Println("  (none)")
+		} else {
+			for idx, domain := range cfg.System.BypassDomains {
+				fmt.Printf("  %d. %s\n", idx+1, domain)
 			}
 		}
 	},
 }
 
 func init() {
+	excludeAddCmd.Flags().BoolVarP(&isDomain, "domain", "d", false, "Add a domain instead of an application")
+	excludeRemoveCmd.Flags().BoolVarP(&isDomain, "domain", "d", false, "Remove a domain instead of an application")
+
 	excludeCmd.AddCommand(excludeTunOnCmd)
 	excludeCmd.AddCommand(excludeTunOffCmd)
 	excludeCmd.AddCommand(excludeAddCmd)
 	excludeCmd.AddCommand(excludeRemoveCmd)
 	excludeCmd.AddCommand(excludeListCmd)
-	
+
 	rootCmd.AddCommand(excludeCmd)
 }

@@ -207,15 +207,24 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		}
 		cfg["inbounds"] = append(inbounds, tunInbound)
 
-		// Create routing rules for excluded apps
+		// Create routing rules for excluded apps and domains
 		routingRules := []interface{}{}
 		if len(sysConfig.BypassApps) > 0 {
-			bypassRule := map[string]interface{}{
+			bypassAppRule := map[string]interface{}{
 				"type":        "field",
 				"process":     sysConfig.BypassApps,
 				"outboundTag": "direct",
 			}
-			routingRules = append(routingRules, bypassRule)
+			routingRules = append(routingRules, bypassAppRule)
+		}
+
+		if len(sysConfig.BypassDomains) > 0 {
+			bypassDomainRule := map[string]interface{}{
+				"type":        "field",
+				"domain":      sysConfig.BypassDomains,
+				"outboundTag": "direct",
+			}
+			routingRules = append(routingRules, bypassDomainRule)
 		}
 
 		cfg["routing"] = map[string]interface{}{
