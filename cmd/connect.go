@@ -96,6 +96,16 @@ var connectCmd = &cobra.Command{
 		xray := engine.New()
 		defer xray.Stop()
 		var routeManager *tunroute.Manager
+		disconnectCurrent := func() {
+			if routeManager != nil {
+				routeManager.Cleanup()
+				routeManager = nil
+			}
+			_ = xray.Stop()
+			if cfg.System.EnableTun {
+				time.Sleep(1200 * time.Millisecond)
+			}
+		}
 
 		orderedCandidates := append([]config.Server(nil), cfg.Servers...)
 		if targetIndex >= 0 && targetIndex < len(cfg.Servers) {
@@ -111,6 +121,8 @@ var connectCmd = &cobra.Command{
 		}
 
 		connectServer := func(server config.Server) (*config.VlessInfo, error) {
+			disconnectCurrent()
+
 			info, err := config.ParseVless(server.URL)
 			if err != nil {
 				return nil, fmt.Errorf("invalid server URL: %v", err)
@@ -119,12 +131,10 @@ var connectCmd = &cobra.Command{
 				return nil, err
 			}
 			if cfg.System.EnableTun {
-				if routeManager != nil {
-					routeManager.Cleanup()
-				}
 				rm := tunroute.New()
 				if err := rm.Setup(info.Address); err != nil {
 					_ = xray.Stop()
+					time.Sleep(1200 * time.Millisecond)
 					return nil, fmt.Errorf("failed to configure TUN routes: %v", err)
 				}
 				routeManager = rm
@@ -199,9 +209,7 @@ var connectCmd = &cobra.Command{
 			select {
 			case <-sigChan:
 				fmt.Println("\nDisconnecting...")
-				if routeManager != nil {
-					routeManager.Cleanup()
-				}
+				disconnectCurrent()
 				if winProxy != nil {
 					winProxy.UnsetProxy()
 					fmt.Println("System proxy restored.")
@@ -226,7 +234,7 @@ var connectCmd = &cobra.Command{
 				}
 
 				if consecutiveFailures >= 2 {
-					_ = xray.Stop()
+					disconnectCurrent()
 					candidates := append([]config.Server(nil), cfg.Servers...)
 					sort.SliceStable(candidates, func(i, j int) bool {
 						if candidates[i].URL == currentServer.URL {
