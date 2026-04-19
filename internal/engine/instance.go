@@ -288,13 +288,12 @@ func buildStreamSettings(info *config.VlessInfo) map[string]interface{} {
 
 func buildDNSConfig(enableTun bool) map[string]interface{} {
 	servers := []interface{}{
-		map[string]interface{}{
-			"address":      chooseRandom([]string{"https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query"}, "https://cloudflare-dns.com/dns-query"),
-			"skipFallback": true,
-		},
-		map[string]interface{}{
-			"address": chooseRandom([]string{"https://dns.quad9.net/dns-query", "https://dns.google/dns-query", "https://cloudflare-dns.com/dns-query"}, "https://dns.quad9.net/dns-query"),
-		},
+		"1.1.1.1",
+		"1.0.0.1",
+		"8.8.8.8",
+		"8.8.4.4",
+		"9.9.9.9",
+		"149.112.112.112",
 	}
 	servers = append(servers, "localhost")
 	return map[string]interface{}{
@@ -303,7 +302,7 @@ func buildDNSConfig(enableTun bool) map[string]interface{} {
 			"cloudflare-dns.com": []string{"1.1.1.1", "1.0.0.1"},
 			"dns.quad9.net":      []string{"9.9.9.9", "149.112.112.112"},
 		},
-		"queryStrategy":   "UseIP",
+		"queryStrategy":   "UseIPv4",
 		"disableFallback": false,
 		"servers":         servers,
 	}

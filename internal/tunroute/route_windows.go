@@ -11,6 +11,7 @@ import (
 )
 
 const InterfaceName = "bebraTun"
+const ipv6FirewallRuleName = "bebraVPN Block IPv6 While TUN"
 
 type defaultRoute struct {
 	InterfaceIndex int    `json:"InterfaceIndex"`
@@ -129,6 +130,11 @@ func (m *Manager) Setup(serverHost string) error {
 		return err
 	}
 
+	_, _ = runPowerShell(fmt.Sprintf(`Get-NetFirewallRule -DisplayName '%s' -ErrorAction SilentlyContinue | Remove-NetFirewallRule`, ipv6FirewallRuleName))
+	if _, err := runPowerShell(fmt.Sprintf(`New-NetFirewallRule -DisplayName '%s' -Direction Outbound -Action Block -RemoteAddress ::/0 -Enabled True`, ipv6FirewallRuleName)); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -139,4 +145,5 @@ func (m *Manager) Cleanup() {
 	for _, ip := range m.serverIPs {
 		_ = runRoute("delete", ip, "mask", "255.255.255.255")
 	}
+	_, _ = runPowerShell(fmt.Sprintf(`Get-NetFirewallRule -DisplayName '%s' -ErrorAction SilentlyContinue | Remove-NetFirewallRule`, ipv6FirewallRuleName))
 }
