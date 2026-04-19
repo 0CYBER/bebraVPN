@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/0CYBER/bebravpn/internal/config"
+	"github.com/0CYBER/bebravpn/internal/tunroute"
 	"github.com/0CYBER/bebravpn/internal/utils"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
@@ -416,12 +417,8 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 			"port":     0,
 			"protocol": "tun",
 			"settings": map[string]interface{}{
-				"address":     []string{"172.19.0.1/30"},
-				"mtu":         1500,
-				"network":     "tcp,udp",
-				"stack":       "system",
-				"autoRoute":   true,
-				"strictRoute": true,
+				"name": tunroute.InterfaceName,
+				"MTU":  1500,
 			},
 			"sniffing": map[string]interface{}{
 				"enabled":      true,

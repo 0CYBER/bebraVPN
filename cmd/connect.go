@@ -14,6 +14,7 @@ import (
 	"github.com/0CYBER/bebravpn/internal/engine"
 	"github.com/0CYBER/bebravpn/internal/prober"
 	"github.com/0CYBER/bebravpn/internal/proxy"
+	"github.com/0CYBER/bebravpn/internal/tunroute"
 	"github.com/spf13/cobra"
 )
 
@@ -94,6 +95,7 @@ var connectCmd = &cobra.Command{
 
 		xray := engine.New()
 		defer xray.Stop()
+		var routeManager *tunroute.Manager
 
 		orderedCandidates := append([]config.Server(nil), cfg.Servers...)
 		if targetIndex >= 0 && targetIndex < len(cfg.Servers) {
@@ -115,6 +117,17 @@ var connectCmd = &cobra.Command{
 			}
 			if err := xray.Start(info, &cfg.System); err != nil {
 				return nil, err
+			}
+			if cfg.System.EnableTun {
+				if routeManager != nil {
+					routeManager.Cleanup()
+				}
+				rm := tunroute.New()
+				if err := rm.Setup(info.Address); err != nil {
+					_ = xray.Stop()
+					return nil, fmt.Errorf("failed to configure TUN routes: %v", err)
+				}
+				routeManager = rm
 			}
 			return info, nil
 		}
@@ -186,6 +199,9 @@ var connectCmd = &cobra.Command{
 			select {
 			case <-sigChan:
 				fmt.Println("\nDisconnecting...")
+				if routeManager != nil {
+					routeManager.Cleanup()
+				}
 				if winProxy != nil {
 					winProxy.UnsetProxy()
 					fmt.Println("System proxy restored.")
