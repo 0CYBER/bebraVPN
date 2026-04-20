@@ -107,11 +107,35 @@ func chooseRandom(values []string, fallback string) string {
 	return values[rand.IntN(len(values))]
 }
 
-func defaultFingerprint(info *config.VlessInfo) string {
+// randomFingerprint returns a random TLS client fingerprint.
+// Fixed "chrome" was detectable by RKN fingerprint scanners;
+// rotating across common browsers makes statistical detection harder.
+func randomFingerprint(info *config.VlessInfo) string {
 	if info.FP != "" {
 		return info.FP
 	}
-	return "chrome"
+	candidates := []string{"chrome", "firefox", "safari", "edge", "ios"}
+	return candidates[rand.IntN(len(candidates))]
+}
+
+// randomSpiderX returns a realistic-looking path for Reality camouflage.
+// The default "/" is a well-known Reality fingerprint pattern; using varied
+// paths makes the TLS handshake look more like genuine browser traffic.
+func randomSpiderX(info *config.VlessInfo) string {
+	if info.SpiderX != "" && info.SpiderX != "/" {
+		return info.SpiderX
+	}
+	paths := []string{
+		"/",
+		"/search?q=news",
+		"/news/",
+		"/product/list",
+		"/about",
+		"/support",
+		"/api/status",
+		"/en-us/",
+	}
+	return paths[rand.IntN(len(paths))]
 }
 
 func buildProtectionDomains(info *config.VlessInfo) []string {
@@ -157,6 +181,20 @@ func buildFinalMask(info *config.VlessInfo) map[string]interface{} {
 	}
 }
 
+// buildMuxSettings returns XUDP multiplexing config for TLS/Reality outbounds.
+// Mux merges hundreds of individual TCP connections into a small number of
+// XUDP streams, drastically reducing the count of TLS handshakes visible to
+// DPI/RKN. concurrency=8 means up to 8 parallel sub-streams per mux tunnel;
+// xudpConcurrency=16 covers UDP (QUIC) traffic too.
+func buildMuxSettings() map[string]interface{} {
+	return map[string]interface{}{
+		"enabled":          true,
+		"concurrency":      8,
+		"xudpConcurrency":  16,
+		"xudpProxyUDP443": "xudp",
+	}
+}
+
 func buildStreamSettings(info *config.VlessInfo) map[string]interface{} {
 	network := info.Type
 	if network == "" {
@@ -180,7 +218,8 @@ func buildStreamSettings(info *config.VlessInfo) map[string]interface{} {
 		tlsSettings := map[string]interface{}{
 			"serverName":    info.SNI,
 			"allowInsecure": info.AllowInsecure,
-			"fingerprint":   defaultFingerprint(info),
+			// Randomized per-connection instead of fixed "chrome".
+			"fingerprint": randomFingerprint(info),
 		}
 		if alpn := splitAndTrimCSV(info.ALPN); len(alpn) > 0 {
 			tlsSettings["alpn"] = alpn
@@ -198,17 +237,14 @@ func buildStreamSettings(info *config.VlessInfo) map[string]interface{} {
 
 	if security == "reality" {
 		streamSettings["realitySettings"] = map[string]interface{}{
-			"publicKey":   info.PBK,
-			"shortId":     info.SID,
-			"serverName":  info.SNI,
-			"fingerprint": defaultFingerprint(info),
-			"spiderX": func() string {
-				if info.SpiderX != "" {
-					return info.SpiderX
-				}
-				return "/"
-			}(),
-			"show": false,
+			"publicKey": info.PBK,
+			"shortId":   info.SID,
+			"serverName": info.SNI,
+			// Randomized per-connection instead of fixed "chrome".
+			"fingerprint": randomFingerprint(info),
+			// Randomized realistic path instead of default "/".
+			"spiderX": randomSpiderX(info),
+			"show":    false,
 		}
 	}
 
@@ -334,6 +370,14 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		},
 		"streamSettings": buildStreamSettings(info),
 	}
+
+	// Add XUDP mux for TLS/Reality servers to reduce visible TLS handshake
+	// count — a key metric RKN uses to fingerprint proxy servers.
+	// Note: mux is NOT compatible with xtls-rprx-vision flow; skip it in that case.
+	if (info.Security == "tls" || info.Security == "reality") && info.Flow != "xtls-rprx-vision" {
+		proxyOutbound["mux"] = buildMuxSettings()
+	}
+
 	fragmentOutbound := map[string]interface{}{
 		"protocol": "freedom",
 		"tag":      "fragment",
