@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -116,6 +118,97 @@ func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
 
 func waitForTunReady(frontend *singtun.Manager, totalTimeout time.Duration) error {
 	return frontend.WaitUntilReady(totalTimeout)
+}
+
+func buildProtectedServer(info *config.VlessInfo) singtun.ProtectedServer {
+	protected := singtun.ProtectedServer{}
+	seenDomains := make(map[string]struct{})
+	seenCIDRs := make(map[string]struct{})
+	var addIP func(net.IP)
+
+	addDomain := func(value string) {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			return
+		}
+		if ip := net.ParseIP(value); ip != nil {
+			addIP(ip)
+			return
+		}
+		if _, ok := seenDomains[value]; ok {
+			return
+		}
+		seenDomains[value] = struct{}{}
+		protected.Domains = append(protected.Domains, value)
+	}
+
+	addIP = func(ip net.IP) {
+		if ip == nil {
+			return
+		}
+		if v4 := ip.To4(); v4 != nil {
+			cidr := v4.String() + "/32"
+			if _, ok := seenCIDRs[cidr]; ok {
+				return
+			}
+			seenCIDRs[cidr] = struct{}{}
+			protected.CIDRs = append(protected.CIDRs, cidr)
+			return
+		}
+		cidr := ip.String() + "/128"
+		if _, ok := seenCIDRs[cidr]; ok {
+			return
+		}
+		seenCIDRs[cidr] = struct{}{}
+		protected.CIDRs = append(protected.CIDRs, cidr)
+	}
+
+	addResolved := func(host string) {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			return
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			addIP(ip)
+			return
+		}
+		addDomain(host)
+		ips, err := net.LookupIP(host)
+		if err != nil {
+			return
+		}
+		for _, ip := range ips {
+			addIP(ip)
+		}
+	}
+
+	addResolved(info.Address)
+	addResolved(info.SNI)
+	addResolved(info.Host)
+	addResolved(info.Authority)
+
+	return protected
+}
+
+func dumpTunDiagnostics() {
+	script := fmt.Sprintf(`
+$dns = Get-DnsClientServerAddress -InterfaceAlias '%s' -AddressFamily IPv4 -ErrorAction SilentlyContinue
+$routes = Get-NetRoute -InterfaceAlias '%s' -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+	Where-Object { $_.DestinationPrefix -in @('0.0.0.0/0', '0.0.0.0/1', '128.0.0.0/1') } |
+	Select-Object DestinationPrefix, NextHop, RouteMetric, InterfaceMetric
+Write-Output '--- bebraTun DNS ---'
+if ($dns) { $dns | Select-Object -ExpandProperty ServerAddresses } else { Write-Output 'missing' }
+Write-Output '--- bebraTun Routes ---'
+if ($routes) { $routes | Format-Table -HideTableHeaders | Out-String } else { Write-Output 'missing' }
+`, singtun.InterfaceName, singtun.InterfaceName)
+
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("TUN diagnostic dump failed: %v (%s)\n", err, strings.TrimSpace(string(output)))
+		return
+	}
+	fmt.Print(string(output))
 }
 
 var connectCmd = &cobra.Command{
@@ -238,9 +331,10 @@ var connectCmd = &cobra.Command{
 				return nil, fmt.Errorf("proxy connectivity check failed: %v", err)
 			}
 			if cfg.System.EnableTun {
+				protected := buildProtectedServer(info)
 				frontend := singtun.New()
 				tunFrontend = frontend
-				if err := frontend.Start(&cfg.System, cfg.LogLevel, info.Address); err != nil {
+				if err := frontend.Start(&cfg.System, cfg.LogLevel, protected); err != nil {
 					disconnectCurrent()
 					return nil, fmt.Errorf("failed to start TUN frontend: %v", err)
 				}
@@ -248,6 +342,7 @@ var connectCmd = &cobra.Command{
 					disconnectCurrent()
 					return nil, fmt.Errorf("TUN frontend did not become ready: %v", err)
 				}
+				dumpTunDiagnostics()
 			}
 			return info, nil
 		}

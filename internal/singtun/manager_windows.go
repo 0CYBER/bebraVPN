@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,11 +30,16 @@ type Manager struct {
 	cancel   context.CancelFunc
 }
 
+type ProtectedServer struct {
+	Domains []string
+	CIDRs   []string
+}
+
 func New() *Manager {
 	return &Manager{}
 }
 
-func (m *Manager) Start(sys *config.System, logLevel string, serverHost string) error {
+func (m *Manager) Start(sys *config.System, logLevel string, protected ProtectedServer) error {
 	if err := utils.EnsureWintun(); err != nil {
 		return fmt.Errorf("failed to ensure wintun.dll: %w", err)
 	}
@@ -44,7 +48,7 @@ func (m *Manager) Start(sys *config.System, logLevel string, serverHost string) 
 		_ = m.Stop()
 	}
 
-	configJSON, err := buildConfig(sys, logLevel, serverHost)
+	configJSON, err := buildConfig(sys, logLevel, protected)
 	if err != nil {
 		return err
 	}
@@ -159,27 +163,26 @@ Set-DnsClientServerAddress -InterfaceAlias '%s' -ResetServerAddresses -ErrorActi
 	_, _ = cmd.CombinedOutput()
 }
 
-func buildConfig(sys *config.System, logLevel string, serverHost string) ([]byte, error) {
+func buildConfig(sys *config.System, logLevel string, protected ProtectedServer) ([]byte, error) {
 	socksPort := sys.SocksPort
 	if socksPort == 0 {
 		socksPort = 10808
 	}
 
 	domainExact, domainSuffix := buildDomainMatchers(sys.BypassDomains)
-	protectedDomains, protectedIPs := buildProtectedMatchers(serverHost)
 	rules := []map[string]interface{}{}
 
-	if len(protectedDomains) > 0 {
+	if len(protected.Domains) > 0 {
 		rules = append(rules, map[string]interface{}{
-			"domain":   protectedDomains,
+			"domain":   protected.Domains,
 			"action":   "route",
 			"outbound": "direct",
 		})
 	}
 
-	if len(protectedIPs) > 0 {
+	if len(protected.CIDRs) > 0 {
 		rules = append(rules, map[string]interface{}{
-			"ip_cidr":  protectedIPs,
+			"ip_cidr":  protected.CIDRs,
 			"action":   "route",
 			"outbound": "direct",
 		})
@@ -240,7 +243,7 @@ func buildConfig(sys *config.System, logLevel string, serverHost string) ([]byte
 				"address":        []string{tunAddress},
 				"mtu":            1500,
 				"auto_route":     true,
-				"strict_route":   true,
+				"strict_route":   false,
 				"stack":          "system",
 			},
 		},
@@ -298,38 +301,6 @@ func buildDomainMatchers(input []string) ([]string, []string) {
 	}
 
 	return exact, suffix
-}
-
-func buildProtectedMatchers(serverHost string) ([]string, []string) {
-	host := strings.ToLower(strings.TrimSpace(serverHost))
-	if host == "" {
-		return nil, nil
-	}
-
-	if ip := net.ParseIP(host); ip != nil {
-		if v4 := ip.To4(); v4 != nil {
-			return nil, []string{v4.String() + "/32"}
-		}
-		return nil, []string{ip.String() + "/128"}
-	}
-
-	ips, err := net.LookupIP(host)
-	var cidrs []string
-	if err == nil {
-		seen := make(map[string]struct{})
-		for _, ip := range ips {
-			if v4 := ip.To4(); v4 != nil {
-				cidr := v4.String() + "/32"
-				if _, ok := seen[cidr]; ok {
-					continue
-				}
-				seen[cidr] = struct{}{}
-				cidrs = append(cidrs, cidr)
-			}
-		}
-	}
-
-	return []string{host}, cidrs
 }
 
 func normalizeLogLevel(level string) string {
