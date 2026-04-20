@@ -210,7 +210,7 @@ func buildConfig(sys *config.System, logLevel string) ([]byte, error) {
 				"mtu":            1500,
 				"auto_route":     true,
 				"strict_route":   true,
-				"stack":          "mixed",
+				"stack":          "system",
 			},
 		},
 		"outbounds": []map[string]interface{}{
