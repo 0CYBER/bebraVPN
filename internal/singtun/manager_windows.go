@@ -15,6 +15,7 @@ import (
 	"github.com/0CYBER/bebravpn/internal/config"
 	"github.com/0CYBER/bebravpn/internal/utils"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	sbjson "github.com/sagernet/sing/common/json"
 )
@@ -48,12 +49,13 @@ func (m *Manager) Start(sys *config.System, logLevel string) error {
 	}
 	_ = persistConfig(configJSON)
 
-	options, err := sbjson.UnmarshalExtendedContext[option.Options](context.Background(), configJSON)
+	parseCtx := include.Context(context.Background())
+	options, err := sbjson.UnmarshalExtendedContext[option.Options](parseCtx, configJSON)
 	if err != nil {
 		return fmt.Errorf("failed to decode sing-box config: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(include.Context(context.Background()))
 	instance, err := box.New(box.Options{
 		Context: ctx,
 		Options: options,
