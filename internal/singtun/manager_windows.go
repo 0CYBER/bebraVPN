@@ -171,12 +171,6 @@ func buildConfig(sys *config.System, logLevel string) ([]byte, error) {
 			"outbound":      "direct",
 		},
 		map[string]interface{}{
-			"network": []string{"udp"},
-			"port":    []int{443},
-			"action":  "reject",
-			"method":  "default",
-		},
-		map[string]interface{}{
 			"network": []string{"tcp", "udp"},
 			"port":    []int{53},
 			"action":  "hijack-dns",
@@ -190,14 +184,11 @@ func buildConfig(sys *config.System, logLevel string) ([]byte, error) {
 		"dns": map[string]interface{}{
 			"servers": []map[string]interface{}{
 				{
-					"type":        "tcp",
-					"tag":         "remote",
-					"server":      "8.8.8.8",
-					"server_port": 53,
-					"detour":      "proxy",
+					"type": "local",
+					"tag":  "local",
 				},
 			},
-			"final":           "remote",
+			"final":           "local",
 			"strategy":        "prefer_ipv4",
 			"reverse_mapping": true,
 		},
@@ -232,6 +223,7 @@ func buildConfig(sys *config.System, logLevel string) ([]byte, error) {
 		},
 		"route": map[string]interface{}{
 			"auto_detect_interface": true,
+			"find_process":          true,
 			"final":                 "proxy",
 			"rules":                 rules,
 		},

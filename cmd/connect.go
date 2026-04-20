@@ -29,6 +29,8 @@ func nextHealthInterval() time.Duration {
 	return time.Duration(45+rand.IntN(46)) * time.Second
 }
 
+const testModeDisconnectAfter = 5 * time.Minute
+
 func connectivityProbeTargets() []string {
 	return []string{
 		"http://www.msftconnecttest.com/connecttest.txt",
@@ -287,6 +289,9 @@ var connectCmd = &cobra.Command{
 		} else {
 			fmt.Printf("Connected to %s! TUN mode is active; bypass rules are applied through sing-box routing.\n", currentServer.Name)
 		}
+		if cfg.System.TestMode {
+			fmt.Printf("Test mode is enabled. Connection will be disconnected automatically in %d minutes.\n", int(testModeDisconnectAfter/time.Minute))
+		}
 		fmt.Println("Press Ctrl+C to disconnect...")
 
 		// Wait for signal
@@ -294,12 +299,30 @@ var connectCmd = &cobra.Command{
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 		healthTimer := time.NewTimer(nextHealthInterval())
 		defer healthTimer.Stop()
+		var testModeTimer *time.Timer
+		if cfg.System.TestMode {
+			testModeTimer = time.NewTimer(testModeDisconnectAfter)
+			defer testModeTimer.Stop()
+		}
 
 		consecutiveFailures := 0
 		for {
 			select {
 			case <-sigChan:
 				fmt.Println("\nDisconnecting...")
+				disconnectCurrent()
+				if winProxy != nil {
+					winProxy.UnsetProxy()
+					fmt.Println("System proxy restored.")
+				}
+				return
+			case <-func() <-chan time.Time {
+				if testModeTimer != nil {
+					return testModeTimer.C
+				}
+				return nil
+			}():
+				fmt.Printf("\nTest mode timeout reached after %d minutes. Disconnecting...\n", int(testModeDisconnectAfter/time.Minute))
 				disconnectCurrent()
 				if winProxy != nil {
 					winProxy.UnsetProxy()

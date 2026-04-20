@@ -14,10 +14,11 @@ type Server struct {
 }
 
 type System struct {
-	ProxyPort   int      `mapstructure:"proxy_port" yaml:"proxy_port" json:"proxy_port"`
-	SocksPort   int      `mapstructure:"socks_port" yaml:"socks_port" json:"socks_port"`
-	EnableProxy bool     `mapstructure:"enable_proxy" yaml:"enable_proxy" json:"enable_proxy"`
+	ProxyPort     int      `mapstructure:"proxy_port" yaml:"proxy_port" json:"proxy_port"`
+	SocksPort     int      `mapstructure:"socks_port" yaml:"socks_port" json:"socks_port"`
+	EnableProxy   bool     `mapstructure:"enable_proxy" yaml:"enable_proxy" json:"enable_proxy"`
 	EnableTun     bool     `mapstructure:"enable_tun" yaml:"enable_tun" json:"enable_tun"`
+	TestMode      bool     `mapstructure:"test_mode" yaml:"test_mode" json:"test_mode"`
 	BypassApps    []string `mapstructure:"bypass_apps" yaml:"bypass_apps" json:"bypass_apps"`
 	BypassDomains []string `mapstructure:"bypass_domains" yaml:"bypass_domains" json:"bypass_domains"`
 }
