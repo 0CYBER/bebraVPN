@@ -82,6 +82,7 @@ func (m *Manager) Stop() error {
 		m.cancel()
 		m.cancel = nil
 	}
+	resetInterfaceDNS()
 	if m.instance != nil {
 		err := m.instance.Close()
 		m.instance = nil
@@ -96,6 +97,9 @@ func (m *Manager) WaitUntilReady(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		lastErr = checkReady()
 		if lastErr == nil {
+			if err := configureInterfaceDNS(); err != nil {
+				return err
+			}
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -130,6 +134,29 @@ Write-Output ready
 		return fmt.Errorf("unexpected readiness output: %s", strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func configureInterfaceDNS() error {
+	script := fmt.Sprintf(`
+Set-DnsClientServerAddress -InterfaceAlias '%s' -ServerAddresses @('1.1.1.1','8.8.8.8') -ErrorAction Stop | Out-Null
+Write-Output ready
+`, InterfaceName)
+
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func resetInterfaceDNS() {
+	script := fmt.Sprintf(`
+Set-DnsClientServerAddress -InterfaceAlias '%s' -ResetServerAddresses -ErrorAction SilentlyContinue | Out-Null
+`, InterfaceName)
+
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	_, _ = cmd.CombinedOutput()
 }
 
 func buildConfig(sys *config.System, logLevel string, serverHost string) ([]byte, error) {
