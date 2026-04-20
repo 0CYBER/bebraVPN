@@ -33,7 +33,6 @@ func connectivityProbeTargets() []string {
 	return []string{
 		"http://www.msftconnecttest.com/connecttest.txt",
 		"http://connectivitycheck.gstatic.com/generate_204",
-		"https://cp.cloudflare.com/generate_204",
 	}
 }
 
@@ -144,7 +143,7 @@ func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
 	deadline := time.Now().Add(totalTimeout)
 	var lastErr error
 	for {
-		lastErr = verifyProxyConnectivity(socksPort, 5*time.Second)
+		lastErr = verifyProxyConnectivity(socksPort, 8*time.Second)
 		if lastErr == nil {
 			return nil
 		}
@@ -166,7 +165,7 @@ func waitForTunConnectivity(frontend *singtun.Manager, totalTimeout time.Duratio
 	deadline := time.Now().Add(totalTimeout)
 	var lastErr error
 	for {
-		lastErr = verifyTunConnectivity(5 * time.Second)
+		lastErr = verifyTunConnectivity(8 * time.Second)
 		if lastErr == nil {
 			return nil
 		}
@@ -295,7 +294,7 @@ var connectCmd = &cobra.Command{
 				xray = nil
 				return nil, err
 			}
-			if err := waitForProxyConnectivity(socksPort, 8*time.Second); err != nil {
+			if err := waitForProxyConnectivity(socksPort, 12*time.Second); err != nil {
 				disconnectCurrent()
 				return nil, fmt.Errorf("proxy connectivity check failed: %v", err)
 			}
@@ -306,7 +305,7 @@ var connectCmd = &cobra.Command{
 					disconnectCurrent()
 					return nil, fmt.Errorf("failed to start TUN frontend: %v", err)
 				}
-				if err := waitForTunConnectivity(frontend, 15*time.Second); err != nil {
+				if err := waitForTunConnectivity(frontend, 20*time.Second); err != nil {
 					disconnectCurrent()
 					return nil, fmt.Errorf("TUN connectivity check failed: %v", err)
 				}
@@ -370,9 +369,9 @@ var connectCmd = &cobra.Command{
 				}
 				return
 			case <-healthTimer.C:
-				if err := verifyProxyConnectivity(socksPort, 5*time.Second); err != nil {
+				if err := verifyProxyConnectivity(socksPort, 8*time.Second); err != nil {
 					consecutiveFailures++
-				} else if cfg.System.EnableTun && (tunFrontend == nil || tunFrontend.WaitUntilReady(2*time.Second) != nil || verifyTunConnectivity(5*time.Second) != nil) {
+				} else if cfg.System.EnableTun && (tunFrontend == nil || tunFrontend.WaitUntilReady(3*time.Second) != nil || verifyTunConnectivity(8*time.Second) != nil) {
 					consecutiveFailures++
 				} else {
 					consecutiveFailures = 0
