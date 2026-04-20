@@ -184,11 +184,21 @@ func buildConfig(sys *config.System, logLevel string) ([]byte, error) {
 		"dns": map[string]interface{}{
 			"servers": []map[string]interface{}{
 				{
-					"type": "local",
-					"tag":  "local",
+					"type":        "udp",
+					"tag":         "remote-dns-1",
+					"server":      "1.1.1.1",
+					"server_port": 53,
+					"detour":      "direct",
+				},
+				{
+					"type":        "udp",
+					"tag":         "remote-dns-2",
+					"server":      "8.8.8.8",
+					"server_port": 53,
+					"detour":      "direct",
 				},
 			},
-			"final":           "local",
+			"final":           "remote-dns-1",
 			"strategy":        "prefer_ipv4",
 			"reverse_mapping": true,
 		},
