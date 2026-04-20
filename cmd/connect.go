@@ -23,13 +23,10 @@ import (
 )
 
 var bestFlag bool
+var lastBestOrdered []config.Server
 
 func nextHealthInterval() time.Duration {
 	return time.Duration(45+rand.IntN(46)) * time.Second
-}
-
-func nextDeepCheckInterval() time.Duration {
-	return time.Duration(180+rand.IntN(181)) * time.Second
 }
 
 func connectivityProbeTargets() []string {
@@ -99,6 +96,24 @@ func verifyProxyConnectivity(socksPort int, timeout time.Duration) error {
 	return lastErr
 }
 
+func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
+	deadline := time.Now().Add(totalTimeout)
+	var lastErr error
+	for {
+		lastErr = verifyProxyConnectivity(socksPort, 5*time.Second)
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if lastErr == nil {
+				lastErr = fmt.Errorf("connectivity probe timed out")
+			}
+			return lastErr
+		}
+		time.Sleep(1200 * time.Millisecond)
+	}
+}
+
 var connectCmd = &cobra.Command{
 	Use:   "connect [server-name]",
 	Short: "Connect to a VLESS server",
@@ -117,10 +132,12 @@ var connectCmd = &cobra.Command{
 
 		var targetServer *config.Server
 		var targetIndex int = -1
+		lastBestOrdered = nil
 		if bestFlag {
 			fmt.Println("Finding the best server...")
 			p := prober.New(1500 * time.Millisecond)
 			ordered, results := p.BestByLatency(cfg.Servers, 64)
+			lastBestOrdered = ordered
 
 			if len(ordered) > 0 {
 				best := ordered[0]
@@ -164,27 +181,37 @@ var connectCmd = &cobra.Command{
 			return
 		}
 
-		xray := engine.New()
-		defer xray.Stop()
+		var xray *engine.Engine
+		defer func() {
+			if xray != nil {
+				_ = xray.Stop()
+			}
+		}()
 		var routeManager *tunroute.Manager
 		disconnectCurrent := func() {
 			if routeManager != nil {
 				routeManager.Cleanup()
 				routeManager = nil
 			}
-			_ = xray.Stop()
+			if xray != nil {
+				_ = xray.Stop()
+				xray = nil
+			}
 			if cfg.System.EnableTun {
-				time.Sleep(1200 * time.Millisecond)
+				time.Sleep(2500 * time.Millisecond)
 			}
 		}
 
-		orderedCandidates := append([]config.Server(nil), cfg.Servers...)
-		if targetIndex >= 0 && targetIndex < len(cfg.Servers) {
-			selected := cfg.Servers[targetIndex]
-			orderedCandidates = append([]config.Server{selected}, append(cfg.Servers[:targetIndex], cfg.Servers[targetIndex+1:]...)...)
+		orderedCandidates := []config.Server{}
+		if bestFlag && len(lastBestOrdered) > 0 {
+			orderedCandidates = append(orderedCandidates, lastBestOrdered...)
+		} else {
+			orderedCandidates = append([]config.Server(nil), cfg.Servers...)
+			if targetIndex >= 0 && targetIndex < len(cfg.Servers) {
+				selected := cfg.Servers[targetIndex]
+				orderedCandidates = append([]config.Server{selected}, append(cfg.Servers[:targetIndex], cfg.Servers[targetIndex+1:]...)...)
+			}
 		}
-
-		fastProber := prober.New(1500 * time.Millisecond)
 		socksPort := cfg.System.SocksPort
 		if socksPort == 0 {
 			socksPort = 10808
@@ -197,26 +224,24 @@ var connectCmd = &cobra.Command{
 			if err != nil {
 				return nil, fmt.Errorf("invalid server URL: %v", err)
 			}
+			xray = engine.New()
 			if err := xray.Start(info, &cfg.System); err != nil {
+				xray = nil
 				return nil, err
 			}
-			if err := verifyProxyConnectivity(socksPort, 5*time.Second); err != nil {
-				_ = xray.Stop()
+			if err := waitForProxyConnectivity(socksPort, 8*time.Second); err != nil {
+				disconnectCurrent()
 				return nil, fmt.Errorf("proxy connectivity check failed: %v", err)
 			}
 			if cfg.System.EnableTun {
 				rm := tunroute.New()
+				routeManager = rm
 				if err := rm.Setup(info.Address); err != nil {
-					_ = xray.Stop()
-					time.Sleep(1200 * time.Millisecond)
+					disconnectCurrent()
 					return nil, fmt.Errorf("failed to configure TUN routes: %v", err)
 				}
-				routeManager = rm
-				if err := verifyProxyConnectivity(socksPort, 5*time.Second); err != nil {
-					routeManager.Cleanup()
-					routeManager = nil
-					_ = xray.Stop()
-					time.Sleep(1200 * time.Millisecond)
+				if err := waitForProxyConnectivity(socksPort, 12*time.Second); err != nil {
+					disconnectCurrent()
 					return nil, fmt.Errorf("proxy connectivity check after TUN setup failed: %v", err)
 				}
 			}
@@ -226,25 +251,6 @@ var connectCmd = &cobra.Command{
 		tryFailover := func(preferred []config.Server, reason string) (*config.Server, *config.VlessInfo, error) {
 			if len(preferred) == 0 {
 				return nil, nil, fmt.Errorf("no servers available")
-			}
-
-			ordered, results := fastProber.BestByLatency(preferred, 64)
-			for _, candidate := range ordered {
-				if l := results[candidate.URL]; l > 0 {
-					candidate.Latency = l
-				}
-			}
-
-			for _, candidate := range ordered {
-				if results[candidate.URL] <= 0 {
-					continue
-				}
-				info, err := connectServer(candidate)
-				if err == nil {
-					fmt.Printf("%sSwitched to %s (%dms)\n", reason, candidate.Name, results[candidate.URL])
-					return &candidate, info, nil
-				}
-				fmt.Printf("Candidate %s failed: %v\n", candidate.Name, err)
 			}
 
 			for _, candidate := range preferred {

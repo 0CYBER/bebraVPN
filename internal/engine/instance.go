@@ -68,7 +68,9 @@ func (e *Engine) Start(info *config.VlessInfo, sysConfig *config.System) error {
 
 func (e *Engine) Stop() error {
 	if e.instance != nil {
-		return e.instance.Close()
+		err := e.instance.Close()
+		e.instance = nil
+		return err
 	}
 	return nil
 }
