@@ -34,7 +34,6 @@ const testModeDisconnectAfter = 5 * time.Minute
 func connectivityProbeTargets() []string {
 	return []string{
 		"http://www.msftconnecttest.com/connecttest.txt",
-		"http://connectivitycheck.gstatic.com/generate_204",
 	}
 }
 
