@@ -12,10 +12,13 @@ import (
 
 const InterfaceName = "bebraTun"
 const ipv6FirewallRuleName = "bebraVPN Block IPv6 While TUN"
+const tunIPv4Address = "172.19.0.1"
+const tunIPv4PrefixLength = 30
 
 type defaultRoute struct {
 	InterfaceIndex int    `json:"InterfaceIndex"`
 	NextHop        string `json:"NextHop"`
+	SourceAddress  string `json:"SourceAddress"`
 }
 
 type Manager struct {
@@ -43,7 +46,7 @@ func runRoute(args ...string) error {
 }
 
 func (m *Manager) detectDefaultRoute() error {
-	output, err := runPowerShell(`$route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1 InterfaceIndex,NextHop | ConvertTo-Json -Compress; Write-Output $route`)
+	output, err := runPowerShell(`$route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1; $ip = Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Sort-Object SkipAsSource, PrefixLength -Descending | Select-Object -First 1 -ExpandProperty IPAddress; [pscustomobject]@{ InterfaceIndex = $route.InterfaceIndex; NextHop = $route.NextHop; SourceAddress = $ip } | ConvertTo-Json -Compress`)
 	if err != nil {
 		return err
 	}
@@ -58,6 +61,17 @@ func (m *Manager) detectDefaultRoute() error {
 
 	m.baseRoute = route
 	return nil
+}
+
+func DetectOutboundBindIPv4() (string, error) {
+	m := New()
+	if err := m.detectDefaultRoute(); err != nil {
+		return "", err
+	}
+	if m.baseRoute.SourceAddress == "" {
+		return "", fmt.Errorf("default route source IPv4 not found")
+	}
+	return m.baseRoute.SourceAddress, nil
 }
 
 func (m *Manager) detectTunIndex() error {
@@ -107,6 +121,21 @@ func (m *Manager) resolveServerIPs(host string) error {
 	return nil
 }
 
+func (m *Manager) configureTunInterface() error {
+	script := fmt.Sprintf(`
+$idx = %d
+Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+	Where-Object { $_.IPAddress -ne '%s' } |
+	Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+if (-not (Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -IPAddress '%s' -ErrorAction SilentlyContinue)) {
+	New-NetIPAddress -InterfaceIndex $idx -IPAddress '%s' -PrefixLength %d -AddressFamily IPv4 -Type Unicast -ErrorAction Stop | Out-Null
+}
+Set-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric 1 -ErrorAction SilentlyContinue | Out-Null
+`, m.tunIndex, tunIPv4Address, tunIPv4Address, tunIPv4Address, tunIPv4PrefixLength)
+	_, err := runPowerShell(script)
+	return err
+}
+
 func (m *Manager) Setup(serverHost string) error {
 	if err := m.detectDefaultRoute(); err != nil {
 		return err
@@ -115,6 +144,9 @@ func (m *Manager) Setup(serverHost string) error {
 		return err
 	}
 	if err := m.detectTunIndex(); err != nil {
+		return err
+	}
+	if err := m.configureTunInterface(); err != nil {
 		return err
 	}
 
@@ -144,6 +176,9 @@ func (m *Manager) Cleanup() {
 	}
 	for _, ip := range m.serverIPs {
 		_ = runRoute("delete", ip, "mask", "255.255.255.255")
+	}
+	if m.tunIndex > 0 {
+		_, _ = runPowerShell(fmt.Sprintf(`Get-NetIPAddress -InterfaceIndex %d -AddressFamily IPv4 -IPAddress '%s' -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue`, m.tunIndex, tunIPv4Address))
 	}
 	_, _ = runPowerShell(fmt.Sprintf(`Get-NetFirewallRule -DisplayName '%s' -ErrorAction SilentlyContinue | Remove-NetFirewallRule`, ipv6FirewallRuleName))
 }

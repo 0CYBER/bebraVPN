@@ -309,7 +309,74 @@ func buildDNSConfig(enableTun bool) map[string]interface{} {
 }
 
 func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) map[string]interface{} {
+	sendThrough := ""
+	if sysConfig.EnableTun {
+		if bindIP, err := tunroute.DetectOutboundBindIPv4(); err == nil {
+			sendThrough = bindIP
+		}
+	}
+
 	// Minimal Xray config for VLESS connection
+	proxyOutbound := map[string]interface{}{
+		"tag":      "proxy",
+		"protocol": "vless",
+		"settings": map[string]interface{}{
+			"vnext": []interface{}{
+				map[string]interface{}{
+					"address": info.Address,
+					"port": func() int {
+						p, _ := strconv.Atoi(info.Port)
+						if p == 0 {
+							return 443
+						}
+						return p
+					}(),
+					"users": []interface{}{
+						func() map[string]interface{} {
+							user := map[string]interface{}{
+								"id":         info.UUID,
+								"encryption": "none",
+							}
+							if info.Flow != "" {
+								user["flow"] = info.Flow
+							}
+							return user
+						}(),
+					},
+				},
+			},
+		},
+		"streamSettings": buildStreamSettings(info),
+	}
+	fragmentOutbound := map[string]interface{}{
+		"protocol": "freedom",
+		"tag":      "fragment",
+		"settings": map[string]interface{}{
+			"fragment": map[string]interface{}{
+				"packets":  "tlshello",
+				"length":   "100-200",
+				"interval": "10-20",
+			},
+		},
+		"streamSettings": map[string]interface{}{
+			"sockopt": map[string]interface{}{
+				"TcpNoDelay": true,
+			},
+		},
+	}
+	directOutbound := map[string]interface{}{
+		"protocol": "freedom",
+		"tag":      "direct",
+		"settings": map[string]interface{}{
+			"domainStrategy": "UseIP",
+		},
+	}
+	if sendThrough != "" {
+		proxyOutbound["sendThrough"] = sendThrough
+		fragmentOutbound["sendThrough"] = sendThrough
+		directOutbound["sendThrough"] = sendThrough
+	}
+
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{
 			"loglevel": "warning",
@@ -337,63 +404,16 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 			},
 		},
 		"outbounds": []interface{}{
-			map[string]interface{}{
-				"tag":      "proxy",
-				"protocol": "vless",
-				"settings": map[string]interface{}{
-					"vnext": []interface{}{
-						map[string]interface{}{
-							"address": info.Address,
-							"port": func() int {
-								p, _ := strconv.Atoi(info.Port)
-								if p == 0 {
-									return 443
-								}
-								return p
-							}(),
-							"users": []interface{}{
-								func() map[string]interface{} {
-									user := map[string]interface{}{
-										"id":         info.UUID,
-										"encryption": "none",
-									}
-									if info.Flow != "" {
-										user["flow"] = info.Flow
-									}
-									return user
-								}(),
-							},
-						},
-					},
-				},
-				"streamSettings": buildStreamSettings(info),
-			},
-			map[string]interface{}{
-				"protocol": "freedom",
-				"tag":      "fragment",
-				"settings": map[string]interface{}{
-					"fragment": map[string]interface{}{
-						"packets":  "tlshello",
-						"length":   "100-200",
-						"interval": "10-20",
-					},
-				},
-				"streamSettings": map[string]interface{}{
-					"sockopt": map[string]interface{}{
-						"TcpNoDelay": true,
-					},
-				},
-			},
-			map[string]interface{}{
-				"protocol": "freedom",
-				"tag":      "direct",
-				"settings": map[string]interface{}{
-					"domainStrategy": "UseIP",
-				},
-			},
+			proxyOutbound,
+			fragmentOutbound,
+			directOutbound,
 			map[string]interface{}{
 				"protocol": "dns",
 				"tag":      "dns-out",
+			},
+			map[string]interface{}{
+				"protocol": "blackhole",
+				"tag":      "block",
 			},
 		},
 	}
@@ -439,6 +459,7 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 			bypassAppRule := map[string]interface{}{
 				"type":        "field",
 				"inboundTag":  []string{"tun2socks"},
+				"network":     "tcp",
 				"process":     sysConfig.BypassApps,
 				"outboundTag": "direct",
 			}
@@ -454,6 +475,13 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 			}
 			routingRules = append(routingRules, bypassDomainRule)
 		}
+		routingRules = append(routingRules, map[string]interface{}{
+			"type":        "field",
+			"inboundTag":  []string{"tun2socks"},
+			"network":     "udp",
+			"port":        "443",
+			"outboundTag": "block",
+		})
 		routingRules = append(routingRules, map[string]interface{}{
 			"type":        "field",
 			"inboundTag":  []string{"tun2socks"},
