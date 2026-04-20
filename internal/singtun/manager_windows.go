@@ -141,6 +141,8 @@ Write-Output ready
 }
 
 func configureInterfaceDNS() error {
+	// Point TUN interface DNS at Cloudflare — traffic to 1.1.1.1 is excluded
+	// from the tunnel via route rules, so DNS queries go direct and bypass DPI.
 	script := fmt.Sprintf(`
 Set-DnsClientServerAddress -InterfaceAlias '%s' -ServerAddresses @('1.1.1.1','8.8.8.8') -ErrorAction Stop | Out-Null
 Write-Output ready
@@ -171,6 +173,23 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 
 	domainExact, domainSuffix := buildDomainMatchers(sys.BypassDomains)
 	rules := []map[string]interface{}{}
+
+	// FIX 1: Exclude loopback so sing-box can reach Xray SOCKS on 127.0.0.1.
+	// Without this, auto_route hijacks loopback traffic and sing-box can never
+	// connect to 127.0.0.1:socksPort — causing all proxied traffic to fail.
+	rules = append(rules, map[string]interface{}{
+		"ip_cidr":  []string{"127.0.0.0/8"},
+		"action":   "route",
+		"outbound": "direct",
+	})
+
+	// FIX 2: Exclude the TUN subnet itself so internal sing-box connections
+	// (172.19.0.x) are not re-routed back into the tunnel.
+	rules = append(rules, map[string]interface{}{
+		"ip_cidr":  []string{"172.19.0.0/30"},
+		"action":   "route",
+		"outbound": "direct",
+	})
 
 	if len(protected.Domains) > 0 {
 		rules = append(rules, map[string]interface{}{
@@ -218,22 +237,49 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 			"action":        "route",
 			"outbound":      "direct",
 		},
+		// FIX 3: Keep DNS servers direct so DNS is fast and not double-proxied.
+		// 1.1.1.1 / 8.8.8.8 are set on the TUN adapter by configureInterfaceDNS,
+		// so they must bypass the tunnel or we get a routing loop.
 		map[string]interface{}{
-			"ip_cidr":  []string{"1.1.1.1/32", "8.8.8.8/32"},
+			"ip_cidr":  []string{"1.1.1.1/32", "1.0.0.1/32", "8.8.8.8/32", "8.8.4.4/32"},
 			"action":   "route",
 			"outbound": "direct",
 		},
-		map[string]interface{}{
-			"network":  []string{"tcp", "udp"},
-			"port":     []int{53},
-			"action":   "route",
-			"outbound": "direct",
-		},
+		// FIX 4: Remove the blanket port-53 direct rule — it caused ALL DNS to
+		// bypass the tunnel regardless of destination. DNS for non-excluded hosts
+		// must go through the proxy so RKN-blocked domains resolve correctly.
+		// Only the two known-direct DNS servers above are excluded by IP.
 	)
 
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{
 			"level": normalizeLogLevel(logLevel),
+		},
+		"dns": map[string]interface{}{
+			// sing-box internal DNS: resolve via proxy for all non-excluded hosts.
+			// This ensures that blocked domains (e.g. youtube.com) are resolved
+			// through the VPN and not leaked to local ISP resolver.
+			"servers": []map[string]interface{}{
+				{
+					"tag":     "dns-proxy",
+					"address": "https://1.1.1.1/dns-query",
+					"detour":  "proxy",
+				},
+				{
+					"tag":     "dns-direct",
+					"address": "https://8.8.8.8/dns-query",
+					"detour":  "direct",
+				},
+			},
+			"rules": []map[string]interface{}{
+				// Server and SNI domains resolve direct (avoid chicken-and-egg)
+				{
+					"domain":  protected.Domains,
+					"server":  "dns-direct",
+				},
+			},
+			"final":    "dns-proxy",
+			"strategy": "ipv4_only",
 		},
 		"inbounds": []map[string]interface{}{
 			{
@@ -243,8 +289,13 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 				"address":        []string{tunAddress},
 				"mtu":            1500,
 				"auto_route":     true,
-				"strict_route":   false,
-				"stack":          "system",
+				// FIX 5: strict_route must be false on Windows with system stack.
+				// strict_route blocks traffic that doesn't originate from the TUN,
+				// which includes the sing-box process itself trying to reach Xray.
+				"strict_route": false,
+				"stack":        "system",
+				// FIX 6: endpoint_independent_nat helps with UDP (games, QUIC)
+				"endpoint_independent_nat": true,
 			},
 		},
 		"outbounds": []map[string]interface{}{
@@ -270,6 +321,12 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 			"final":                 "proxy",
 			"rules":                 rules,
 		},
+	}
+
+	// If no protected domains, remove empty dns rules slice to keep config clean
+	if len(protected.Domains) == 0 {
+		dnsSection := cfg["dns"].(map[string]interface{})
+		dnsSection["rules"] = []map[string]interface{}{}
 	}
 
 	return json.MarshalIndent(cfg, "", "  ")
