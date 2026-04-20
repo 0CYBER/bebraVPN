@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,7 @@ func New() *Manager {
 	return &Manager{}
 }
 
-func (m *Manager) Start(sys *config.System, logLevel string) error {
+func (m *Manager) Start(sys *config.System, logLevel string, serverHost string) error {
 	if err := utils.EnsureWintun(); err != nil {
 		return fmt.Errorf("failed to ensure wintun.dll: %w", err)
 	}
@@ -43,7 +44,7 @@ func (m *Manager) Start(sys *config.System, logLevel string) error {
 		_ = m.Stop()
 	}
 
-	configJSON, err := buildConfig(sys, logLevel)
+	configJSON, err := buildConfig(sys, logLevel, serverHost)
 	if err != nil {
 		return err
 	}
@@ -131,14 +132,31 @@ Write-Output ready
 	return nil
 }
 
-func buildConfig(sys *config.System, logLevel string) ([]byte, error) {
+func buildConfig(sys *config.System, logLevel string, serverHost string) ([]byte, error) {
 	socksPort := sys.SocksPort
 	if socksPort == 0 {
 		socksPort = 10808
 	}
 
 	domainExact, domainSuffix := buildDomainMatchers(sys.BypassDomains)
+	protectedDomains, protectedIPs := buildProtectedMatchers(serverHost)
 	rules := []map[string]interface{}{}
+
+	if len(protectedDomains) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"domain":   protectedDomains,
+			"action":   "route",
+			"outbound": "direct",
+		})
+	}
+
+	if len(protectedIPs) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"ip_cidr":  protectedIPs,
+			"action":   "route",
+			"outbound": "direct",
+		})
+	}
 
 	if len(sys.BypassApps) > 0 {
 		rules = append(rules, map[string]interface{}{
@@ -266,6 +284,38 @@ func buildDomainMatchers(input []string) ([]string, []string) {
 	}
 
 	return exact, suffix
+}
+
+func buildProtectedMatchers(serverHost string) ([]string, []string) {
+	host := strings.ToLower(strings.TrimSpace(serverHost))
+	if host == "" {
+		return nil, nil
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			return nil, []string{v4.String() + "/32"}
+		}
+		return nil, []string{ip.String() + "/128"}
+	}
+
+	ips, err := net.LookupIP(host)
+	var cidrs []string
+	if err == nil {
+		seen := make(map[string]struct{})
+		for _, ip := range ips {
+			if v4 := ip.To4(); v4 != nil {
+				cidr := v4.String() + "/32"
+				if _, ok := seen[cidr]; ok {
+					continue
+				}
+				seen[cidr] = struct{}{}
+				cidrs = append(cidrs, cidr)
+			}
+		}
+	}
+
+	return []string{host}, cidrs
 }
 
 func normalizeLogLevel(level string) string {

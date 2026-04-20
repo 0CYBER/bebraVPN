@@ -240,7 +240,7 @@ var connectCmd = &cobra.Command{
 			if cfg.System.EnableTun {
 				frontend := singtun.New()
 				tunFrontend = frontend
-				if err := frontend.Start(&cfg.System, cfg.LogLevel); err != nil {
+				if err := frontend.Start(&cfg.System, cfg.LogLevel, info.Address); err != nil {
 					disconnectCurrent()
 					return nil, fmt.Errorf("failed to start TUN frontend: %v", err)
 				}
