@@ -95,50 +95,6 @@ func verifyProxyConnectivity(socksPort int, timeout time.Duration) error {
 	return lastErr
 }
 
-func verifyTunConnectivity(timeout time.Duration) error {
-	transport := &http.Transport{
-		Proxy:                 nil,
-		DisableKeepAlives:     true,
-		ForceAttemptHTTP2:     false,
-		TLSHandshakeTimeout:   timeout,
-		ResponseHeaderTimeout: timeout,
-		ExpectContinueTimeout: timeout,
-	}
-	defer transport.CloseIdleConnections()
-
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-	}
-
-	var lastErr error
-	for _, target := range connectivityProbeTargets() {
-		req, err := http.NewRequest(http.MethodGet, target, nil)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		req.Header.Set("User-Agent", "bebravpn-tun-check/1.0")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
-		_ = resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-			return nil
-		}
-		lastErr = fmt.Errorf("unexpected HTTP status %d from %s", resp.StatusCode, target)
-	}
-
-	if lastErr == nil {
-		lastErr = fmt.Errorf("tun connectivity probe failed")
-	}
-	return lastErr
-}
-
 func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
 	deadline := time.Now().Add(totalTimeout)
 	var lastErr error
@@ -157,26 +113,8 @@ func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
 	}
 }
 
-func waitForTunConnectivity(frontend *singtun.Manager, totalTimeout time.Duration) error {
-	if err := frontend.WaitUntilReady(totalTimeout / 2); err != nil {
-		return err
-	}
-
-	deadline := time.Now().Add(totalTimeout)
-	var lastErr error
-	for {
-		lastErr = verifyTunConnectivity(8 * time.Second)
-		if lastErr == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			if lastErr == nil {
-				lastErr = fmt.Errorf("tun connectivity probe timed out")
-			}
-			return lastErr
-		}
-		time.Sleep(1200 * time.Millisecond)
-	}
+func waitForTunReady(frontend *singtun.Manager, totalTimeout time.Duration) error {
+	return frontend.WaitUntilReady(totalTimeout)
 }
 
 var connectCmd = &cobra.Command{
@@ -305,9 +243,9 @@ var connectCmd = &cobra.Command{
 					disconnectCurrent()
 					return nil, fmt.Errorf("failed to start TUN frontend: %v", err)
 				}
-				if err := waitForTunConnectivity(frontend, 20*time.Second); err != nil {
+				if err := waitForTunReady(frontend, 20*time.Second); err != nil {
 					disconnectCurrent()
-					return nil, fmt.Errorf("TUN connectivity check failed: %v", err)
+					return nil, fmt.Errorf("TUN frontend did not become ready: %v", err)
 				}
 			}
 			return info, nil
@@ -371,7 +309,7 @@ var connectCmd = &cobra.Command{
 			case <-healthTimer.C:
 				if err := verifyProxyConnectivity(socksPort, 8*time.Second); err != nil {
 					consecutiveFailures++
-				} else if cfg.System.EnableTun && (tunFrontend == nil || tunFrontend.WaitUntilReady(3*time.Second) != nil || verifyTunConnectivity(8*time.Second) != nil) {
+				} else if cfg.System.EnableTun && (tunFrontend == nil || tunFrontend.WaitUntilReady(3*time.Second) != nil) {
 					consecutiveFailures++
 				} else {
 					consecutiveFailures = 0
