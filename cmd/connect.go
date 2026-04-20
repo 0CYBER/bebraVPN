@@ -3,10 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -35,7 +33,9 @@ const testModeDisconnectAfter = 5 * time.Minute
 
 func connectivityProbeTargets() []string {
 	return []string{
-		"http://www.msftconnecttest.com/connecttest.txt",
+		"1.1.1.1:443",
+		"8.8.8.8:443",
+		"www.msftconnecttest.com:80",
 	}
 }
 
@@ -46,50 +46,25 @@ func verifyProxyConnectivity(socksPort int, timeout time.Duration) error {
 		return err
 	}
 
-	transport := &http.Transport{
-		Proxy:                 nil,
-		DisableKeepAlives:     true,
-		ForceAttemptHTTP2:     false,
-		TLSHandshakeTimeout:   timeout,
-		ResponseHeaderTimeout: timeout,
-		ExpectContinueTimeout: timeout,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			type contextDialer interface {
-				DialContext(ctx context.Context, network, address string) (net.Conn, error)
-			}
-			if cd, ok := dialer.(contextDialer); ok {
-				return cd.DialContext(ctx, network, addr)
-			}
-			return dialer.Dial(network, addr)
-		},
-	}
-	defer transport.CloseIdleConnections()
-
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-	}
-
 	var lastErr error
+	type contextDialer interface {
+		DialContext(ctx context.Context, network, address string) (net.Conn, error)
+	}
 	for _, target := range connectivityProbeTargets() {
-		req, err := http.NewRequest(http.MethodGet, target, nil)
+		var conn net.Conn
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		if cd, ok := dialer.(contextDialer); ok {
+			conn, err = cd.DialContext(ctx, "tcp", target)
+		} else {
+			conn, err = dialer.Dial("tcp", target)
+		}
+		cancel()
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		req.Header.Set("User-Agent", "bebravpn-connect-check/1.0")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
-		_ = resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-			return nil
-		}
-		lastErr = fmt.Errorf("unexpected HTTP status %d from %s", resp.StatusCode, target)
+		_ = conn.Close()
+		return nil
 	}
 
 	if lastErr == nil {
@@ -102,7 +77,7 @@ func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
 	deadline := time.Now().Add(totalTimeout)
 	var lastErr error
 	for {
-		lastErr = verifyProxyConnectivity(socksPort, 8*time.Second)
+		lastErr = verifyProxyConnectivity(socksPort, 2500*time.Millisecond)
 		if lastErr == nil {
 			return nil
 		}
@@ -112,7 +87,7 @@ func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
 			}
 			return lastErr
 		}
-		time.Sleep(1200 * time.Millisecond)
+		time.Sleep(600 * time.Millisecond)
 	}
 }
 
@@ -295,19 +270,17 @@ var connectCmd = &cobra.Command{
 		// New order: TUN stop → short drain → Xray stop.
 		disconnectCurrent := func() {
 			if tunFrontend != nil {
+				time.Sleep(300 * time.Millisecond)
 				_ = tunFrontend.Stop()
 				tunFrontend = nil
-				// Give sing-box time to finish draining active connections
-				// before Xray SOCKS disappears. 800ms is enough for graceful
-				// TCP FIN exchange; we don't want to wait longer on Ctrl+C.
-				time.Sleep(800 * time.Millisecond)
+				time.Sleep(1500 * time.Millisecond)
 			}
 			if xray != nil {
 				_ = xray.Stop()
 				xray = nil
 			}
 			if cfg.System.EnableTun {
-				time.Sleep(400 * time.Millisecond)
+				time.Sleep(600 * time.Millisecond)
 			}
 		}
 
@@ -338,7 +311,7 @@ var connectCmd = &cobra.Command{
 				xray = nil
 				return nil, err
 			}
-			if err := waitForProxyConnectivity(socksPort, 12*time.Second); err != nil {
+			if err := waitForProxyConnectivity(socksPort, 5*time.Second); err != nil {
 				disconnectCurrent()
 				return nil, fmt.Errorf("proxy connectivity check failed: %v", err)
 			}
@@ -435,7 +408,7 @@ var connectCmd = &cobra.Command{
 				}
 				return
 			case <-healthTimer.C:
-				if err := verifyProxyConnectivity(socksPort, 8*time.Second); err != nil {
+				if err := verifyProxyConnectivity(socksPort, 3*time.Second); err != nil {
 					consecutiveFailures++
 				} else if cfg.System.EnableTun && (tunFrontend == nil || tunFrontend.WaitUntilReady(3*time.Second) != nil) {
 					consecutiveFailures++

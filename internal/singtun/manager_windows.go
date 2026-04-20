@@ -253,7 +253,8 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{
-			"level": normalizeLogLevel(logLevel),
+			"disabled": strings.ToLower(strings.TrimSpace(logLevel)) != "debug",
+			"level":    normalizeLogLevel(logLevel),
 		},
 		"dns": map[string]interface{}{
 			// sing-box internal DNS: resolve via proxy for all non-excluded hosts.
