@@ -168,6 +168,19 @@ func buildRemoteDNSDomains() []string {
 	}
 }
 
+func buildBlockedDomainMatchers(sysConfig *config.System) []string {
+	var result []string
+	for _, domain := range config.ProfileBlockedDomains(sysConfig.SecurityProfile) {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+		result = append(result, "full:"+strings.TrimPrefix(domain, "."))
+		result = append(result, "domain:"+strings.TrimPrefix(domain, "."))
+	}
+	return uniqueStrings(result)
+}
+
 func buildFinalMask(info *config.VlessInfo) map[string]interface{} {
 	return map[string]interface{}{
 		"tcp": []interface{}{
@@ -532,6 +545,15 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 				"outboundTag": "direct",
 			})
 		}
+	}
+
+	blockedDomains := buildBlockedDomainMatchers(sysConfig)
+	if len(blockedDomains) > 0 {
+		routingRules = append(routingRules, map[string]interface{}{
+			"type":        "field",
+			"domain":      blockedDomains,
+			"outboundTag": "block",
+		})
 	}
 
 	routingRules = append(routingRules,

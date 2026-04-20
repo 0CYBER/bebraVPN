@@ -19,6 +19,7 @@ type System struct {
 	EnableProxy   bool     `mapstructure:"enable_proxy" yaml:"enable_proxy" json:"enable_proxy"`
 	EnableTun     bool     `mapstructure:"enable_tun" yaml:"enable_tun" json:"enable_tun"`
 	TestMode      bool     `mapstructure:"test_mode" yaml:"test_mode" json:"test_mode"`
+	SecurityProfile string `mapstructure:"security_profile" yaml:"security_profile" json:"security_profile"`
 	BypassApps    []string `mapstructure:"bypass_apps" yaml:"bypass_apps" json:"bypass_apps"`
 	BypassDomains []string `mapstructure:"bypass_domains" yaml:"bypass_domains" json:"bypass_domains"`
 }

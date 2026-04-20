@@ -38,6 +38,7 @@ func NewManager() *Manager {
 	viper.SetDefault("system.enable_proxy", true)
 	viper.SetDefault("system.enable_tun", false)
 	viper.SetDefault("system.test_mode", false)
+	viper.SetDefault("system.security_profile", SecurityProfileBalanced)
 	viper.SetDefault("system.bypass_apps", []string{})
 	viper.SetDefault("system.bypass_domains", []string{})
 	viper.SetDefault("log_level", "warning")
@@ -59,6 +60,7 @@ func (m *Manager) Load() (*Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, err
 	}
+	cfg.System.SecurityProfile = NormalizeSecurityProfile(cfg.System.SecurityProfile)
 
 	// Servers are sourced from servers/*.txt only.
 	cfg.Servers = m.scanServersDir()

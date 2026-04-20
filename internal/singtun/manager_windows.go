@@ -172,6 +172,7 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 	}
 
 	domainExact, domainSuffix := buildDomainMatchers(sys.BypassDomains)
+	blockExact, blockSuffix := buildDomainMatchers(config.ProfileBlockedDomains(sys.SecurityProfile))
 	rules := []map[string]interface{}{}
 
 	// FIX 1: Exclude loopback so sing-box can reach Xray SOCKS on 127.0.0.1.
@@ -228,6 +229,22 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 			"domain_suffix": domainSuffix,
 			"action":        "route",
 			"outbound":      "direct",
+		})
+	}
+
+	if len(blockExact) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"domain":   blockExact,
+			"action":   "route",
+			"outbound": "block",
+		})
+	}
+
+	if len(blockSuffix) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"domain_suffix": blockSuffix,
+			"action":        "route",
+			"outbound":      "block",
 		})
 	}
 
