@@ -266,7 +266,6 @@ var connectCmd = &cobra.Command{
 					}
 				}
 			} else {
-				// Select first one as fallback
 				targetServer = &cfg.Servers[0]
 				targetIndex = 0
 				fmt.Printf("Using server: %s\n", targetServer.Name)
@@ -285,17 +284,30 @@ var connectCmd = &cobra.Command{
 			}
 		}()
 		var tunFrontend *singtun.Manager
+
+		// FIX: shutdown order matters.
+		// sing-box (TUN) must stop FIRST so it stops accepting/routing new
+		// connections and drains existing ones before Xray SOCKS disappears.
+		// Old order (xray first) caused two classes of errors:
+		//   - "dial tcp 127.0.0.1:10808: operation was canceled" — sing-box
+		//     tries to open new conns to already-dead Xray
+		//   - "wsasend: connection aborted" — in-flight writes to dead Xray socket
+		// New order: TUN stop → short drain → Xray stop.
 		disconnectCurrent := func() {
 			if tunFrontend != nil {
 				_ = tunFrontend.Stop()
 				tunFrontend = nil
+				// Give sing-box time to finish draining active connections
+				// before Xray SOCKS disappears. 800ms is enough for graceful
+				// TCP FIN exchange; we don't want to wait longer on Ctrl+C.
+				time.Sleep(800 * time.Millisecond)
 			}
 			if xray != nil {
 				_ = xray.Stop()
 				xray = nil
 			}
 			if cfg.System.EnableTun {
-				time.Sleep(1200 * time.Millisecond)
+				time.Sleep(400 * time.Millisecond)
 			}
 		}
 
@@ -388,7 +400,6 @@ var connectCmd = &cobra.Command{
 		}
 		fmt.Println("Press Ctrl+C to disconnect...")
 
-		// Wait for signal
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 		healthTimer := time.NewTimer(nextHealthInterval())
