@@ -10,8 +10,6 @@ import (
 	"strings"
 
 	"github.com/0CYBER/bebravpn/internal/config"
-	"github.com/0CYBER/bebravpn/internal/tunroute"
-	"github.com/0CYBER/bebravpn/internal/utils"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 
@@ -28,13 +26,6 @@ func New() *Engine {
 }
 
 func (e *Engine) Start(info *config.VlessInfo, sysConfig *config.System) error {
-	if sysConfig.EnableTun {
-		// Ensure wintun.dll is available
-		if err := utils.EnsureWintun(); err != nil {
-			return fmt.Errorf("failed to ensure wintun.dll: %v", err)
-		}
-	}
-
 	xrayConfig := e.buildConfig(info, sysConfig)
 	configJSON, err := json.Marshal(xrayConfig)
 	if err != nil {
@@ -311,13 +302,6 @@ func buildDNSConfig(enableTun bool) map[string]interface{} {
 }
 
 func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) map[string]interface{} {
-	sendThrough := ""
-	if sysConfig.EnableTun {
-		if bindIP, err := tunroute.DetectOutboundBindIPv4(); err == nil {
-			sendThrough = bindIP
-		}
-	}
-
 	// Minimal Xray config for VLESS connection
 	proxyOutbound := map[string]interface{}{
 		"tag":      "proxy",
@@ -373,11 +357,6 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 			"domainStrategy": "UseIP",
 		},
 	}
-	if sendThrough != "" {
-		proxyOutbound["sendThrough"] = sendThrough
-		fragmentOutbound["sendThrough"] = sendThrough
-		directOutbound["sendThrough"] = sendThrough
-	}
 
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{
@@ -428,68 +407,7 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		},
 	}
 
-	cfg["dns"] = buildDNSConfig(sysConfig.EnableTun)
-
-	if sysConfig.EnableTun {
-		// Add TUN inbound
-		inbounds := cfg["inbounds"].([]interface{})
-		tunInbound := map[string]interface{}{
-			"tag":      "tun2socks",
-			"port":     0,
-			"protocol": "tun",
-			"settings": map[string]interface{}{
-				"name": tunroute.InterfaceName,
-				"MTU":  1500,
-			},
-			"sniffing": map[string]interface{}{
-				"enabled":      true,
-				"destOverride": []string{"http", "tls", "quic"},
-				"routeOnly":    true,
-			},
-		}
-		cfg["inbounds"] = append(inbounds, tunInbound)
-
-		routingRules = append(routingRules, map[string]interface{}{
-			"type":        "field",
-			"inboundTag":  []string{"tun2socks"},
-			"network":     "tcp,udp",
-			"port":        "53",
-			"outboundTag": "dns-out",
-		})
-
-		if len(sysConfig.BypassApps) > 0 {
-			bypassAppRule := map[string]interface{}{
-				"type":        "field",
-				"inboundTag":  []string{"tun2socks"},
-				"network":     "tcp",
-				"process":     sysConfig.BypassApps,
-				"outboundTag": "direct",
-			}
-			routingRules = append(routingRules, bypassAppRule)
-		}
-
-		if len(sysConfig.BypassDomains) > 0 {
-			bypassDomainRule := map[string]interface{}{
-				"type":        "field",
-				"inboundTag":  []string{"tun2socks"},
-				"domain":      sysConfig.BypassDomains,
-				"outboundTag": "direct",
-			}
-			routingRules = append(routingRules, bypassDomainRule)
-		}
-		routingRules = append(routingRules, map[string]interface{}{
-			"type":        "field",
-			"inboundTag":  []string{"tun2socks"},
-			"network":     "udp",
-			"port":        "443",
-			"outboundTag": "block",
-		})
-		routingRules = append(routingRules, map[string]interface{}{
-			"type":        "field",
-			"inboundTag":  []string{"tun2socks"},
-			"outboundTag": "proxy",
-		})
-	}
+	cfg["dns"] = buildDNSConfig(false)
 
 	cfg["routing"] = map[string]interface{}{
 		"domainStrategy": "IPIfNonMatch",

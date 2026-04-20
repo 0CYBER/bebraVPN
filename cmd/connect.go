@@ -17,7 +17,7 @@ import (
 	"github.com/0CYBER/bebravpn/internal/engine"
 	"github.com/0CYBER/bebravpn/internal/prober"
 	"github.com/0CYBER/bebravpn/internal/proxy"
-	"github.com/0CYBER/bebravpn/internal/tunroute"
+	"github.com/0CYBER/bebravpn/internal/singtun"
 	"github.com/spf13/cobra"
 	xnetproxy "golang.org/x/net/proxy"
 )
@@ -96,6 +96,50 @@ func verifyProxyConnectivity(socksPort int, timeout time.Duration) error {
 	return lastErr
 }
 
+func verifyTunConnectivity(timeout time.Duration) error {
+	transport := &http.Transport{
+		Proxy:                 nil,
+		DisableKeepAlives:     true,
+		ForceAttemptHTTP2:     false,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		ExpectContinueTimeout: timeout,
+	}
+	defer transport.CloseIdleConnections()
+
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+
+	var lastErr error
+	for _, target := range connectivityProbeTargets() {
+		req, err := http.NewRequest(http.MethodGet, target, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("User-Agent", "bebravpn-tun-check/1.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+			return nil
+		}
+		lastErr = fmt.Errorf("unexpected HTTP status %d from %s", resp.StatusCode, target)
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("tun connectivity probe failed")
+	}
+	return lastErr
+}
+
 func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
 	deadline := time.Now().Add(totalTimeout)
 	var lastErr error
@@ -107,6 +151,28 @@ func waitForProxyConnectivity(socksPort int, totalTimeout time.Duration) error {
 		if time.Now().After(deadline) {
 			if lastErr == nil {
 				lastErr = fmt.Errorf("connectivity probe timed out")
+			}
+			return lastErr
+		}
+		time.Sleep(1200 * time.Millisecond)
+	}
+}
+
+func waitForTunConnectivity(frontend *singtun.Manager, totalTimeout time.Duration) error {
+	if err := frontend.WaitUntilReady(totalTimeout / 2); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(totalTimeout)
+	var lastErr error
+	for {
+		lastErr = verifyTunConnectivity(5 * time.Second)
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if lastErr == nil {
+				lastErr = fmt.Errorf("tun connectivity probe timed out")
 			}
 			return lastErr
 		}
@@ -187,18 +253,18 @@ var connectCmd = &cobra.Command{
 				_ = xray.Stop()
 			}
 		}()
-		var routeManager *tunroute.Manager
+		var tunFrontend *singtun.Manager
 		disconnectCurrent := func() {
-			if routeManager != nil {
-				routeManager.Cleanup()
-				routeManager = nil
+			if tunFrontend != nil {
+				_ = tunFrontend.Stop()
+				tunFrontend = nil
 			}
 			if xray != nil {
 				_ = xray.Stop()
 				xray = nil
 			}
 			if cfg.System.EnableTun {
-				time.Sleep(2500 * time.Millisecond)
+				time.Sleep(1200 * time.Millisecond)
 			}
 		}
 
@@ -234,15 +300,15 @@ var connectCmd = &cobra.Command{
 				return nil, fmt.Errorf("proxy connectivity check failed: %v", err)
 			}
 			if cfg.System.EnableTun {
-				rm := tunroute.New()
-				routeManager = rm
-				if err := rm.Setup(info.Address); err != nil {
+				frontend := singtun.New()
+				tunFrontend = frontend
+				if err := frontend.Start(&cfg.System, cfg.LogLevel); err != nil {
 					disconnectCurrent()
-					return nil, fmt.Errorf("failed to configure TUN routes: %v", err)
+					return nil, fmt.Errorf("failed to start TUN frontend: %v", err)
 				}
-				if err := waitForProxyConnectivity(socksPort, 12*time.Second); err != nil {
+				if err := waitForTunConnectivity(frontend, 15*time.Second); err != nil {
 					disconnectCurrent()
-					return nil, fmt.Errorf("proxy connectivity check after TUN setup failed: %v", err)
+					return nil, fmt.Errorf("TUN connectivity check failed: %v", err)
 				}
 			}
 			return info, nil
@@ -282,7 +348,7 @@ var connectCmd = &cobra.Command{
 
 			fmt.Printf("Connected to %s! Proxy active on %s\n", currentServer.Name, proxyAddr)
 		} else {
-			fmt.Printf("Connected to %s! TUN mode is active; bypass rules are applied through Xray routing.\n", currentServer.Name)
+			fmt.Printf("Connected to %s! TUN mode is active; bypass rules are applied through sing-box routing.\n", currentServer.Name)
 		}
 		fmt.Println("Press Ctrl+C to disconnect...")
 
@@ -305,6 +371,8 @@ var connectCmd = &cobra.Command{
 				return
 			case <-healthTimer.C:
 				if err := verifyProxyConnectivity(socksPort, 5*time.Second); err != nil {
+					consecutiveFailures++
+				} else if cfg.System.EnableTun && (tunFrontend == nil || tunFrontend.WaitUntilReady(2*time.Second) != nil || verifyTunConnectivity(5*time.Second) != nil) {
 					consecutiveFailures++
 				} else {
 					consecutiveFailures = 0
