@@ -216,34 +216,21 @@ func buildConfig(sys *config.System, logLevel string, serverHost string) ([]byte
 			"outbound":      "direct",
 		},
 		map[string]interface{}{
-			"network": []string{"tcp", "udp"},
-			"port":    []int{53},
-			"action":  "hijack-dns",
+			"ip_cidr":  []string{"1.1.1.1/32", "8.8.8.8/32"},
+			"action":   "route",
+			"outbound": "direct",
+		},
+		map[string]interface{}{
+			"network":  []string{"tcp", "udp"},
+			"port":     []int{53},
+			"action":   "route",
+			"outbound": "direct",
 		},
 	)
 
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{
 			"level": normalizeLogLevel(logLevel),
-		},
-		"dns": map[string]interface{}{
-			"servers": []map[string]interface{}{
-				{
-					"type":        "udp",
-					"tag":         "remote-dns-1",
-					"server":      "1.1.1.1",
-					"server_port": 53,
-				},
-				{
-					"type":        "udp",
-					"tag":         "remote-dns-2",
-					"server":      "8.8.8.8",
-					"server_port": 53,
-				},
-			},
-			"final":           "remote-dns-1",
-			"strategy":        "prefer_ipv4",
-			"reverse_mapping": true,
 		},
 		"inbounds": []map[string]interface{}{
 			{
