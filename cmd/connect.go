@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sort"
@@ -16,6 +19,7 @@ import (
 	"github.com/0CYBER/bebravpn/internal/proxy"
 	"github.com/0CYBER/bebravpn/internal/tunroute"
 	"github.com/spf13/cobra"
+	xnetproxy "golang.org/x/net/proxy"
 )
 
 var bestFlag bool
@@ -26,6 +30,73 @@ func nextHealthInterval() time.Duration {
 
 func nextDeepCheckInterval() time.Duration {
 	return time.Duration(180+rand.IntN(181)) * time.Second
+}
+
+func connectivityProbeTargets() []string {
+	return []string{
+		"http://www.msftconnecttest.com/connecttest.txt",
+		"http://connectivitycheck.gstatic.com/generate_204",
+		"https://cp.cloudflare.com/generate_204",
+	}
+}
+
+func verifyProxyConnectivity(socksPort int, timeout time.Duration) error {
+	socksAddr := fmt.Sprintf("127.0.0.1:%d", socksPort)
+	dialer, err := xnetproxy.SOCKS5("tcp", socksAddr, nil, &net.Dialer{Timeout: timeout})
+	if err != nil {
+		return err
+	}
+
+	transport := &http.Transport{
+		Proxy:                 nil,
+		DisableKeepAlives:     true,
+		ForceAttemptHTTP2:     false,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		ExpectContinueTimeout: timeout,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			type contextDialer interface {
+				DialContext(ctx context.Context, network, address string) (net.Conn, error)
+			}
+			if cd, ok := dialer.(contextDialer); ok {
+				return cd.DialContext(ctx, network, addr)
+			}
+			return dialer.Dial(network, addr)
+		},
+	}
+	defer transport.CloseIdleConnections()
+
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+
+	var lastErr error
+	for _, target := range connectivityProbeTargets() {
+		req, err := http.NewRequest(http.MethodGet, target, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("User-Agent", "bebravpn-connect-check/1.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+			return nil
+		}
+		lastErr = fmt.Errorf("unexpected HTTP status %d from %s", resp.StatusCode, target)
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("connectivity probe failed")
+	}
+	return lastErr
 }
 
 var connectCmd = &cobra.Command{
@@ -114,7 +185,6 @@ var connectCmd = &cobra.Command{
 		}
 
 		fastProber := prober.New(1500 * time.Millisecond)
-		healthProber := prober.New(3 * time.Second)
 		socksPort := cfg.System.SocksPort
 		if socksPort == 0 {
 			socksPort = 10808
@@ -130,6 +200,10 @@ var connectCmd = &cobra.Command{
 			if err := xray.Start(info, &cfg.System); err != nil {
 				return nil, err
 			}
+			if err := verifyProxyConnectivity(socksPort, 5*time.Second); err != nil {
+				_ = xray.Stop()
+				return nil, fmt.Errorf("proxy connectivity check failed: %v", err)
+			}
 			if cfg.System.EnableTun {
 				rm := tunroute.New()
 				if err := rm.Setup(info.Address); err != nil {
@@ -138,6 +212,13 @@ var connectCmd = &cobra.Command{
 					return nil, fmt.Errorf("failed to configure TUN routes: %v", err)
 				}
 				routeManager = rm
+				if err := verifyProxyConnectivity(socksPort, 5*time.Second); err != nil {
+					routeManager.Cleanup()
+					routeManager = nil
+					_ = xray.Stop()
+					time.Sleep(1200 * time.Millisecond)
+					return nil, fmt.Errorf("proxy connectivity check after TUN setup failed: %v", err)
+				}
 			}
 			return info, nil
 		}
@@ -163,6 +244,7 @@ var connectCmd = &cobra.Command{
 					fmt.Printf("%sSwitched to %s (%dms)\n", reason, candidate.Name, results[candidate.URL])
 					return &candidate, info, nil
 				}
+				fmt.Printf("Candidate %s failed: %v\n", candidate.Name, err)
 			}
 
 			for _, candidate := range preferred {
@@ -171,12 +253,13 @@ var connectCmd = &cobra.Command{
 					fmt.Printf("%sSwitched to %s\n", reason, candidate.Name)
 					return &candidate, info, nil
 				}
+				fmt.Printf("Candidate %s failed: %v\n", candidate.Name, err)
 			}
 
 			return nil, nil, fmt.Errorf("all candidate servers failed")
 		}
 
-		currentServer, currentInfo, err := tryFailover(orderedCandidates, "")
+		currentServer, _, err := tryFailover(orderedCandidates, "")
 		if err != nil {
 			fmt.Printf("Failed to start Xray: %v\n", err)
 			return
@@ -204,7 +287,6 @@ var connectCmd = &cobra.Command{
 		defer healthTimer.Stop()
 
 		consecutiveFailures := 0
-		nextDeepCheckAt := time.Now().Add(nextDeepCheckInterval())
 		for {
 			select {
 			case <-sigChan:
@@ -216,18 +298,7 @@ var connectCmd = &cobra.Command{
 				}
 				return
 			case <-healthTimer.C:
-				localConn, localErr := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), 700*time.Millisecond)
-				if localErr == nil {
-					_ = localConn.Close()
-				}
-
-				remoteErr := error(nil)
-				if time.Now().After(nextDeepCheckAt) {
-					_, remoteErr = healthProber.Ping(currentInfo)
-					nextDeepCheckAt = time.Now().Add(nextDeepCheckInterval())
-				}
-
-				if localErr != nil || remoteErr != nil {
+				if err := verifyProxyConnectivity(socksPort, 5*time.Second); err != nil {
 					consecutiveFailures++
 				} else {
 					consecutiveFailures = 0
@@ -249,9 +320,8 @@ var connectCmd = &cobra.Command{
 					nextServer, nextInfo, failoverErr := tryFailover(candidates, fmt.Sprintf("Current server %s is unavailable. ", currentServer.Name))
 					if failoverErr == nil {
 						currentServer = nextServer
-						currentInfo = nextInfo
+						_ = nextInfo
 						consecutiveFailures = 0
-						nextDeepCheckAt = time.Now().Add(nextDeepCheckInterval())
 					}
 				}
 
