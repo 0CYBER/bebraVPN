@@ -107,6 +107,16 @@ func chooseRandom(values []string, fallback string) string {
 	return values[rand.IntN(len(values))]
 }
 
+func randomALPN() []string {
+	options := [][]string{
+		{"h2", "http/1.1"},
+		{"http/1.1", "h2"},
+		{"h2"},
+		{"http/1.1"},
+	}
+	return options[rand.IntN(len(options))]
+}
+
 // randomFingerprint returns a random TLS client fingerprint.
 // Fixed "chrome" was detectable by RKN fingerprint scanners;
 // rotating across common browsers makes statistical detection harder.
@@ -154,6 +164,7 @@ func buildRemoteDNSDomains() []string {
 		"full:cloudflare-dns.com",
 		"full:dns.google",
 		"full:dns.quad9.net",
+		"full:common.dot.dns.yandex.net",
 	}
 }
 
@@ -224,7 +235,7 @@ func buildStreamSettings(info *config.VlessInfo) map[string]interface{} {
 		if alpn := splitAndTrimCSV(info.ALPN); len(alpn) > 0 {
 			tlsSettings["alpn"] = alpn
 		} else {
-			tlsSettings["alpn"] = []string{"h2", "http/1.1"}
+			tlsSettings["alpn"] = randomALPN()
 		}
 		if info.ECHConfigList != "" {
 			tlsSettings["echConfigList"] = info.ECHConfigList
@@ -315,21 +326,50 @@ func buildStreamSettings(info *config.VlessInfo) map[string]interface{} {
 	return streamSettings
 }
 
-func buildDNSConfig(enableTun bool) map[string]interface{} {
+func buildDNSConfig(info *config.VlessInfo, sysConfig *config.System) map[string]interface{} {
+	localDomains := append([]string{}, buildProtectionDomains(info)...)
+	for _, domain := range sysConfig.BypassDomains {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+		if strings.HasPrefix(domain, "full:") || strings.HasPrefix(domain, "domain:") {
+			localDomains = append(localDomains, domain)
+			continue
+		}
+		trimmed := strings.TrimPrefix(domain, ".")
+		localDomains = append(localDomains, "full:"+trimmed, "domain:"+trimmed)
+	}
+	localDomains = uniqueStrings(localDomains)
+
 	servers := []interface{}{
-		"1.1.1.1",
-		"1.0.0.1",
-		"8.8.8.8",
-		"8.8.4.4",
-		"9.9.9.9",
-		"149.112.112.112",
+		map[string]interface{}{
+			"address":       "https://cloudflare-dns.com/dns-query",
+			"queryStrategy": "UseIPv4",
+		},
+		map[string]interface{}{
+			"address":       "https://dns.google/dns-query",
+			"queryStrategy": "UseIPv4",
+		},
+		map[string]interface{}{
+			"address":       "https://dns.quad9.net/dns-query",
+			"queryStrategy": "UseIPv4",
+		},
+	}
+	if len(localDomains) > 0 {
+		servers = append(servers, map[string]interface{}{
+			"address":       "localhost",
+			"domains":       localDomains,
+			"queryStrategy": "UseIPv4",
+		})
 	}
 	servers = append(servers, "localhost")
 	return map[string]interface{}{
 		"hosts": map[string]interface{}{
-			"dns.google":         []string{"8.8.8.8", "8.8.4.4"},
-			"cloudflare-dns.com": []string{"1.1.1.1", "1.0.0.1"},
-			"dns.quad9.net":      []string{"9.9.9.9", "149.112.112.112"},
+			"dns.google":                []string{"8.8.8.8", "8.8.4.4"},
+			"cloudflare-dns.com":        []string{"1.1.1.1", "1.0.0.1"},
+			"dns.quad9.net":             []string{"9.9.9.9", "149.112.112.112"},
+			"common.dot.dns.yandex.net": []string{"77.88.8.8", "77.88.8.1"},
 		},
 		"queryStrategy":   "UseIPv4",
 		"disableFallback": false,
@@ -427,6 +467,23 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 					"routeOnly":    true,
 				},
 			},
+			map[string]interface{}{
+				"tag": "http-in",
+				"port": func() int {
+					if sysConfig.ProxyPort == 0 {
+						return 10809
+					}
+					return sysConfig.ProxyPort
+				}(),
+				"listen":   "127.0.0.1",
+				"protocol": "http",
+				"settings": map[string]interface{}{},
+				"sniffing": map[string]interface{}{
+					"enabled":      true,
+					"destOverride": []string{"http", "tls", "quic"},
+					"routeOnly":    true,
+				},
+			},
 		},
 		"outbounds": []interface{}{
 			proxyOutbound,
@@ -443,15 +500,68 @@ func (e *Engine) buildConfig(info *config.VlessInfo, sysConfig *config.System) m
 		},
 	}
 
-	routingRules := []interface{}{
-		map[string]interface{}{
+	routingRules := []interface{}{}
+	protectedDomains := buildProtectionDomains(info)
+	if len(protectedDomains) > 0 {
+		routingRules = append(routingRules, map[string]interface{}{
 			"type":        "field",
-			"inboundTag":  []string{"socks-in"},
-			"outboundTag": "proxy",
-		},
+			"domain":      protectedDomains,
+			"outboundTag": "direct",
+		})
 	}
 
-	cfg["dns"] = buildDNSConfig(false)
+	if len(sysConfig.BypassDomains) > 0 {
+		var bypassDomains []string
+		for _, domain := range sysConfig.BypassDomains {
+			domain = strings.TrimSpace(domain)
+			if domain == "" {
+				continue
+			}
+			if strings.HasPrefix(domain, "full:") || strings.HasPrefix(domain, "domain:") {
+				bypassDomains = append(bypassDomains, domain)
+				continue
+			}
+			trimmed := strings.TrimPrefix(domain, ".")
+			bypassDomains = append(bypassDomains, "full:"+trimmed, "domain:"+trimmed)
+		}
+		bypassDomains = uniqueStrings(bypassDomains)
+		if len(bypassDomains) > 0 {
+			routingRules = append(routingRules, map[string]interface{}{
+				"type":        "field",
+				"domain":      bypassDomains,
+				"outboundTag": "direct",
+			})
+		}
+	}
+
+	routingRules = append(routingRules,
+		map[string]interface{}{
+			"type":        "field",
+			"inboundTag":  []string{"socks-in", "http-in"},
+			"network":     "udp",
+			"port":        "443",
+			"outboundTag": "block",
+		},
+		map[string]interface{}{
+			"type":        "field",
+			"domain":      buildRemoteDNSDomains(),
+			"outboundTag": "proxy",
+		},
+		map[string]interface{}{
+			"type":        "field",
+			"inboundTag":  []string{"socks-in", "http-in"},
+			"network":     "tcp,udp",
+			"port":        "53",
+			"outboundTag": "dns-out",
+		},
+		map[string]interface{}{
+			"type":        "field",
+			"inboundTag":  []string{"socks-in", "http-in"},
+			"outboundTag": "proxy",
+		},
+	)
+
+	cfg["dns"] = buildDNSConfig(info, sysConfig)
 
 	cfg["routing"] = map[string]interface{}{
 		"domainStrategy": "IPIfNonMatch",

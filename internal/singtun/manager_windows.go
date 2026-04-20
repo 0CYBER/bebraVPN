@@ -237,11 +237,17 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 			"action":        "route",
 			"outbound":      "direct",
 		},
+		map[string]interface{}{
+			"network":  []string{"udp"},
+			"port":     []int{443},
+			"action":   "route",
+			"outbound": "block",
+		},
 		// FIX 3: Keep DNS servers direct so DNS is fast and not double-proxied.
 		// 1.1.1.1 / 8.8.8.8 are set on the TUN adapter by configureInterfaceDNS,
 		// so they must bypass the tunnel or we get a routing loop.
 		map[string]interface{}{
-			"ip_cidr":  []string{"1.1.1.1/32", "1.0.0.1/32", "8.8.8.8/32", "8.8.4.4/32"},
+			"ip_cidr":  []string{"1.1.1.1/32", "1.0.0.1/32", "8.8.8.8/32", "8.8.4.4/32", "77.88.8.8/32", "77.88.8.1/32"},
 			"action":   "route",
 			"outbound": "direct",
 		},
@@ -267,7 +273,17 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 					"detour":  "proxy",
 				},
 				{
+					"tag":     "dns-proxy-alt",
+					"address": "https://dns.google/dns-query",
+					"detour":  "proxy",
+				},
+				{
 					"tag":     "dns-direct",
+					"address": "https://common.dot.dns.yandex.net/dns-query",
+					"detour":  "direct",
+				},
+				{
+					"tag":     "dns-direct-alt",
 					"address": "https://8.8.8.8/dns-query",
 					"detour":  "direct",
 				},
@@ -277,6 +293,14 @@ func buildConfig(sys *config.System, logLevel string, protected ProtectedServer)
 				{
 					"domain":  protected.Domains,
 					"server":  "dns-direct",
+				},
+				{
+					"domain":  domainExact,
+					"server":  "dns-direct",
+				},
+				{
+					"domain_suffix": domainSuffix,
+					"server":        "dns-direct",
 				},
 			},
 			"final":    "dns-proxy",

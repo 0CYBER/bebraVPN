@@ -186,6 +186,18 @@ if ($routes) { $routes | Format-Table -HideTableHeaders | Out-String } else { Wr
 	fmt.Print(string(output))
 }
 
+func buildSystemProxyAddress(sys config.System) string {
+	socksPort := sys.SocksPort
+	if socksPort == 0 {
+		socksPort = 10808
+	}
+	httpPort := sys.ProxyPort
+	if httpPort == 0 {
+		httpPort = 10809
+	}
+	return fmt.Sprintf("http=127.0.0.1:%d;https=127.0.0.1:%d;socks=127.0.0.1:%d", httpPort, httpPort, socksPort)
+}
+
 var connectCmd = &cobra.Command{
 	Use:   "connect [server-name]",
 	Short: "Connect to a VLESS server",
@@ -358,7 +370,7 @@ var connectCmd = &cobra.Command{
 		var winProxy *proxy.WindowsProxy
 		if !cfg.System.EnableTun {
 			winProxy = proxy.New()
-			proxyAddr := fmt.Sprintf("socks=127.0.0.1:%d", cfg.System.SocksPort)
+			proxyAddr := buildSystemProxyAddress(cfg.System)
 			if err := winProxy.SetProxy(proxyAddr); err != nil {
 				fmt.Printf("Failed to set system proxy: %v\n", err)
 				return
